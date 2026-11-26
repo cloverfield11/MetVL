@@ -99,15 +99,17 @@ The game engine boots seamlessly and runs indefinitely in a continuous presentat
   - Connect XMA decoder threads and PCM stream mixers (`AcpHal.dll`, `xapu.dll`) directly to the CoreAudio ring buffer.
   - Support 48 kHz 16/24-bit stereo and multi-channel surround sound output.
 
-#### 🎮 Phase 4: Direct3D 12 to Metal Command Translation Layer
-* **Command Encoder Translation**:
-  - Implement a Metal translation backend in `crates/victory-gpu` converting `ID3D12GraphicsCommandList` records to `MTLRenderCommandEncoder` and `MTLComputeCommandEncoder`.
-  - Map D3D12 render targets, depth-stencil views (`DSV`), and viewports to Metal texture attachments.
-* **Shader Translation Pipeline (DXIL -> MSL)**:
-  - Integrate a DXIL (DirectX Intermediate Language) to Metal Shading Language (MSL) translator for vertex, pixel, compute, and amplification/mesh shaders.
-  - Support D3D12 root signature parameter mapping to Metal argument buffers and buffer binding indices.
+#### 🎮 Phase 4: Direct3D 12 to Metal Translation via Apple D3DMetal (GPTK 4 Beta 3)
+* **Native D3DMetal 4.0b3 Integration (Zero-Wine Architecture)**:
+  - Connect Apple's official `D3DMetal.framework` (Version 4.0b3 from Apple Game Porting Toolkit 4 Beta, `redist/lib/external/D3DMetal.framework`) directly into our Rust runtime (`victory-gpu`) via native macOS dynamic linking (`dlopen`).
+  - **100% Standalone & Wine-Free**: `D3DMetal.framework` is a pure macOS Mach-O x86_64 library linking exclusively to Apple system frameworks (`Metal.framework`, `MetalFX.framework`, `MetalKit.framework`, `AppKit.framework`, `libSystem.B.dylib`). It operates without Wine, wineserver, or virtual Windows prefixes, preserving MetVL's ultra-lean native architecture.
+* **Command Translation & Pipeline Binding**:
+  - Re-enable the COM Direct3D 12 execution layer (`crates/victory-gpu/src/draw.rs` and `host.rs`) to instantiate host devices directly via `D3DMetal!_D3D12CreateDevice`.
+  - Translate Scarlett D3D12.X command lists into `D3DMetal`'s `ID3D12GraphicsCommandList` calls, which map directly to Apple Silicon GPU hardware commands.
+* **Apple Shader Translation Engine**:
+  - Leverage `libmetalirconverter.dylib` (Metal IR Converter) and `libdxcompiler.dylib` from the GPTK 4 beta suite to compile DirectX Intermediate Language (DXIL) shaders to Metal Shading Language (MSL) with native Shader Model 6.6+ and mesh shader support.
 * **First Visible 3D Gameplay Geometry**:
-  - Rasterize prologue scene, character models, world terrain, and UI overlays onto the CAMetalLayer surface.
+  - Rasterize prologue world geometry, character models (Lucia & Jason), vehicles, lighting, and HUD overlays onto the active `CAMetalLayer` window surface.
 
 #### ⚡ Phase 5: Metal 3 & Unified Memory Performance (Target: 30+ FPS)
 * **Zero-Copy Unified Memory Architecture**:
