@@ -32,6 +32,8 @@ mod profile;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
 #[cfg(windows)]
+mod rosetta;
+#[cfg(windows)]
 mod threads;
 #[cfg(windows)]
 mod thunks;

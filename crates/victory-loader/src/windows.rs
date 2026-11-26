@@ -83,6 +83,7 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
     if !loaded.info.is_dll() {
         // SAFETY: just mapped, and no title code has run.
         unsafe { crate::tls::redirect(loaded.base(), &loaded.info) }?;
+        unsafe { crate::rosetta::patch_image(loaded.base(), &loaded.info) }?;
     }
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),

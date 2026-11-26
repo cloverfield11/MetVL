@@ -4611,26 +4611,45 @@ impl<'a> Lower<'a> {
         if threads > 128 || mesh.max_vertices > 256 || mesh.max_primitives > 256 {
             return Err("a mesh shader beyond the host's limits");
         }
-        // D3D12 caps the outputs of the declared maxima at 32 KiB. Lane n
-        // writes only vertex n and primitive n, so maxima past the lanes are
-        // never reached: they come down to the lane count when the outputs
-        // do not fit.
+        // D3D12 and Metal cap total mesh output and threadgroup memory.
+        // On Metal (Apple Silicon), the total mesh size limit is 32768 bytes,
+        // which includes: out_vectors * 16 * max_vertices + prim_vectors * 16 * max_primitives + indices + lds_bytes.
+        let out_vectors = self
+            .s
+            .outputs
+            .iter()
+            .filter_map(|e| e.row)
+            .map(|r| r + 1)
+            .max()
+            .unwrap_or(0) as u64;
+        let prim_vectors = self
+            .s
+            .prims
+            .iter()
+            .filter_map(|e| e.row)
+            .map(|r| r + 1)
+            .max()
+            .unwrap_or(0) as u64;
+        let lds_bytes = 4 * self.s.lds_dwords as u64;
+        let fits_metal = |m: super::shader::Mesh| -> bool {
+            let vertex_bytes = out_vectors * 16 * u64::from(m.max_vertices);
+            let prim_bytes = prim_vectors * 16 * u64::from(m.max_primitives);
+            let index_bytes = u64::from(m.max_primitives) * 8; // indices allowance
+            vertex_bytes + prim_bytes + index_bytes + lds_bytes <= 32768
+        };
         use super::container::{MESH_OUTPUT_LIMIT, mesh_output_bytes};
         let (outputs, prims) = (&self.s.outputs, &self.s.prims);
-        let fits = |m: super::shader::Mesh| {
-            mesh_output_bytes(outputs, prims, m.max_vertices, m.max_primitives) <= MESH_OUTPUT_LIMIT
+        let limit = MESH_OUTPUT_LIMIT.saturating_sub(lds_bytes).max(1024);
+        let fits_dx12 = |m: super::shader::Mesh| {
+            mesh_output_bytes(outputs, prims, m.max_vertices, m.max_primitives) <= limit
         };
-        if !fits(mesh) {
+        if !fits_dx12(mesh) || !fits_metal(mesh) {
             mesh.max_vertices = mesh.max_vertices.min(threads);
             mesh.max_primitives = mesh.max_primitives.min(threads);
-            // shortcut: outputs past the cap even at the lane count are
-            // still emitted with the lower maxima (drivers take them);
-            // refuse them here if one hangs.
-            // Experiment (`VICTORY_MESH_OUTPUT_STRICT=1`): they are refused.
-            if !fits(mesh) && std::env::var_os("VICTORY_MESH_OUTPUT_STRICT").is_some() {
-                return Err("a mesh shader whose outputs pass the host's 32 KiB");
+            while (!fits_dx12(mesh) || !fits_metal(mesh)) && (mesh.max_vertices > 16 || mesh.max_primitives > 16) {
+                mesh.max_vertices = mesh.max_vertices.saturating_sub(16).max(16);
+                mesh.max_primitives = mesh.max_primitives.saturating_sub(16).max(16);
             }
-            self.s.mesh = Some(mesh);
         }
         let e = self.s.entry;
         let void = self.s.t.void;

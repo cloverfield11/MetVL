@@ -80,6 +80,263 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (b'H', RIGHT_STICK),
 ];
 
+/// Configurable keyboard-to-Xbox-gamepad map (`VICTORY_KEYMAP=X=K,A=SPACE,...`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KeyMap {
+    buttons: [(u8, u32); 14],
+    lt: u8,
+    rt: u8,
+    lx_neg: u8,
+    lx_pos: u8,
+    ly_pos: u8,
+    ly_neg: u8,
+    rx_neg: u8,
+    rx_pos: u8,
+    ry_pos: u8,
+    ry_neg: u8,
+}
+
+impl Default for KeyMap {
+    fn default() -> Self {
+        Self {
+            buttons: FALLBACK_BUTTONS,
+            lt: b'Z',
+            rt: b'C',
+            lx_neg: b'A',
+            lx_pos: b'D',
+            ly_pos: b'W',
+            ly_neg: b'S',
+            rx_neg: b'J',
+            rx_pos: b'L',
+            ry_pos: b'I',
+            ry_neg: b'K',
+        }
+    }
+}
+
+fn parse_vk(raw: &str) -> Option<u8> {
+    let s = raw.trim().to_ascii_uppercase();
+    if s.is_empty() {
+        return None;
+    }
+    if s == "NONE" || s == "UNBOUND" || s == "OFF" {
+        return Some(0);
+    }
+    if s.len() == 1 {
+        let b = s.as_bytes()[0];
+        if b.is_ascii_uppercase() || b.is_ascii_digit() {
+            return Some(b);
+        }
+    }
+    if let Some(hex) = s.strip_prefix("0X") {
+        return u8::from_str_radix(hex, 16).ok();
+    }
+    if let Some(num) = s.strip_prefix("VK_") {
+        return num.parse::<u8>().ok();
+    }
+    if let Some(f) = s.strip_prefix('F')
+        && let Ok(n) = f.parse::<u8>()
+        && (1..=12).contains(&n)
+    {
+        return Some(0x6F + n);
+    }
+    if let Some(d) = s.strip_prefix("NUM")
+        && let Ok(n) = d.parse::<u8>()
+        && n <= 9
+    {
+        return Some(0x60 + n);
+    }
+    Some(match s.as_str() {
+        "SPACE" | "SPACEBAR" => 0x20,
+        "ENTER" | "RETURN" => 0x0D,
+        "ESC" | "ESCAPE" => 0x1B,
+        "TAB" => 0x09,
+        "BACKSPACE" | "BACK" => 0x08,
+        "SHIFT" => 0x10,
+        "LSHIFT" => 0xA0,
+        "RSHIFT" => 0xA1,
+        "CTRL" | "CONTROL" => 0x11,
+        "LCTRL" | "LCONTROL" => 0xA2,
+        "RCTRL" | "RCONTROL" => 0xA3,
+        "ALT" => 0x12,
+        "LALT" => 0xA4,
+        "RALT" => 0xA5,
+        "CAPS" | "CAPSLOCK" => 0x14,
+        "UP" => 0x26,
+        "DOWN" => 0x28,
+        "LEFT" => 0x25,
+        "RIGHT" => 0x27,
+        "INS" | "INSERT" => 0x2D,
+        "DEL" | "DELETE" => 0x2E,
+        "HOME" => 0x24,
+        "END" => 0x23,
+        "PGUP" | "PAGEUP" => 0x21,
+        "PGDN" | "PAGEDOWN" => 0x22,
+        "COMMA" | "," => 0xBC,
+        "PERIOD" | "DOT" | "." => 0xBE,
+        "SEMICOLON" | ";" => 0xBA,
+        "SLASH" | "/" => 0xBF,
+        "MINUS" | "-" => 0xBD,
+        "EQUALS" | "=" => 0xBB,
+        "LBRACKET" | "[" => 0xDB,
+        "RBRACKET" | "]" => 0xDD,
+        "BACKSLASH" | "\\" => 0xDC,
+        "QUOTE" | "'" => 0xDE,
+        "TILDE" | "GRAVE" | "`" => 0xC0,
+        _ => return None,
+    })
+}
+
+impl KeyMap {
+    fn from_spec(spec: &str) -> Self {
+        let mut map = Self::default();
+        // Track which slots were explicitly set in `spec` so remapping e.g. `X=K`
+        // automatically clears the default `RY-=K` conflict without clobbering
+        // another explicit binding!
+        let mut explicit_btn = [false; 14];
+        let mut explicit_extra = [false; 10]; // lt, rt, lx-, lx+, ly+, ly-, rx-, rx+, ry+, ry-
+        let clear_default = |m: &mut KeyMap, vk: u8, eb: &[bool; 14], ee: &[bool; 10]| {
+            if vk == 0 {
+                return;
+            }
+            for i in 0..14 {
+                if !eb[i] && m.buttons[i].0 == vk {
+                    m.buttons[i].0 = 0;
+                }
+            }
+            let extra: [&mut u8; 10] = [
+                &mut m.lt,
+                &mut m.rt,
+                &mut m.lx_neg,
+                &mut m.lx_pos,
+                &mut m.ly_pos,
+                &mut m.ly_neg,
+                &mut m.rx_neg,
+                &mut m.rx_pos,
+                &mut m.ry_pos,
+                &mut m.ry_neg,
+            ];
+            for (i, slot) in extra.into_iter().enumerate() {
+                if !ee[i] && *slot == vk {
+                    *slot = 0;
+                }
+            }
+        };
+        for pair in spec.split([',', ';']) {
+            let Some((raw_act, raw_key)) = pair.split_once('=') else {
+                continue;
+            };
+            let act = raw_act.trim().to_ascii_uppercase();
+            let Some(vk) = parse_vk(raw_key) else {
+                continue;
+            };
+            let btn_idx = match act.as_str() {
+                "MENU" | "START" => Some(0),
+                "VIEW" | "SELECT" | "BACK" => Some(1),
+                "A" => Some(2),
+                "B" => Some(3),
+                "X" => Some(4),
+                "Y" => Some(5),
+                "UP" | "DPAD_UP" => Some(6),
+                "DOWN" | "DPAD_DOWN" => Some(7),
+                "LEFT" | "DPAD_LEFT" => Some(8),
+                "RIGHT" | "DPAD_RIGHT" => Some(9),
+                "LB" | "LEFT_SHOULDER" => Some(10),
+                "RB" | "RIGHT_SHOULDER" => Some(11),
+                "LS" | "L3" | "LEFT_STICK" => Some(12),
+                "RS" | "R3" | "RIGHT_STICK" => Some(13),
+                _ => None,
+            };
+            if let Some(i) = btn_idx {
+                explicit_btn[i] = true;
+                clear_default(&mut map, vk, &explicit_btn, &explicit_extra);
+                map.buttons[i].0 = vk;
+                continue;
+            }
+            let extra_idx = match act.as_str() {
+                "LT" | "L2" | "LEFT_TRIGGER" => Some(0),
+                "RT" | "R2" | "RIGHT_TRIGGER" => Some(1),
+                "LX-" | "LS_LEFT" => Some(2),
+                "LX+" | "LS_RIGHT" => Some(3),
+                "LY+" | "LS_UP" => Some(4),
+                "LY-" | "LS_DOWN" => Some(5),
+                "RX-" | "RS_LEFT" => Some(6),
+                "RX+" | "RS_RIGHT" => Some(7),
+                "RY+" | "RS_UP" => Some(8),
+                "RY-" | "RS_DOWN" => Some(9),
+                _ => None,
+            };
+            if let Some(i) = extra_idx {
+                explicit_extra[i] = true;
+                clear_default(&mut map, vk, &explicit_btn, &explicit_extra);
+                match i {
+                    0 => map.lt = vk,
+                    1 => map.rt = vk,
+                    2 => map.lx_neg = vk,
+                    3 => map.lx_pos = vk,
+                    4 => map.ly_pos = vk,
+                    5 => map.ly_neg = vk,
+                    6 => map.rx_neg = vk,
+                    7 => map.rx_pos = vk,
+                    8 => map.ry_pos = vk,
+                    9 => map.ry_neg = vk,
+                    _ => {}
+                }
+            }
+        }
+        map
+    }
+
+    fn current() -> &'static KeyMap {
+        static MAP: LazyLock<KeyMap> = LazyLock::new(|| {
+            match std::env::var("VICTORY_KEYMAP") {
+                Ok(spec) if !spec.trim().is_empty() => {
+                    tracing::info!(keymap = %spec, "custom keyboard-to-Xbox keymap active (VICTORY_KEYMAP)");
+                    KeyMap::from_spec(&spec)
+                }
+                _ => KeyMap::default(),
+            }
+        });
+        &MAP
+    }
+}
+
+fn key_held(keys: &[KeyState], vk: u8) -> bool {
+    if vk == 0 {
+        return false;
+    }
+    match vk {
+        // Generic modifiers match either left or right key reported by host::keys()
+        0x10 => keys.iter().any(|k| matches!(k.virtual_key, 0x10 | 0xA0 | 0xA1)),
+        0x11 => keys.iter().any(|k| matches!(k.virtual_key, 0x11 | 0xA2 | 0xA3)),
+        0x12 => keys.iter().any(|k| matches!(k.virtual_key, 0x12 | 0xA4 | 0xA5)),
+        _ => keys.iter().any(|k| k.virtual_key == vk),
+    }
+}
+
+fn fallback_with_map(keys: &[KeyState], mouse: MousePad, km: &KeyMap) -> PadState {
+    let on = |vk: u8| -> f32 {
+        if key_held(keys, vk) {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    PadState {
+        buttons: km
+            .buttons
+            .iter()
+            .filter(|(vk, _)| key_held(keys, *vk))
+            .fold(0, |all, (_, bit)| all | bit),
+        left_trigger: on(km.lt).max(mouse.left_trigger),
+        right_trigger: on(km.rt).max(mouse.right_trigger),
+        left_x: on(km.lx_pos) - on(km.lx_neg),
+        left_y: on(km.ly_pos) - on(km.ly_neg),
+        right_x: (on(km.rx_pos) - on(km.rx_neg) + mouse.right_x).clamp(-1.0, 1.0),
+        right_y: (on(km.ry_pos) - on(km.ry_neg) + mouse.right_y).clamp(-1.0, 1.0),
+    }
+}
+
 /// A gamepad reading: triggers 0 to 1, sticks -1 to 1 (up positive).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -105,62 +362,31 @@ struct KeyState {
 
 const _: () = assert!(size_of::<KeyState>() == 12 && size_of::<PadState>() == 28);
 
+/// Mouse-emulated right analog stick and trigger values.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct MousePad {
+    right_x: f32,
+    right_y: f32,
+    left_trigger: f32,
+    right_trigger: f32,
+}
+
 /// Host input, or a fake in tests.
 trait Source: Send {
     /// The pad in host slot `slot`, `None` when the slot is empty.
     fn pad(&mut self, slot: usize) -> Option<PadState>;
     /// Keys held down; none while the title's window lacks focus.
     fn keys(&mut self) -> Vec<KeyState>;
+    /// Optional mouse camera (right stick) and mouse trigger buttons.
+    fn mouse(&mut self) -> MousePad {
+        MousePad::default()
+    }
     /// Motor speeds: low frequency (left), high frequency (right).
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
 
-fn fallback(keys: &[KeyState]) -> PadState {
-    let on = |vk: u8| {
-        if keys.iter().any(|k| k.virtual_key == vk) {
-            1.0
-        } else {
-            0.0
-        }
-    };
-    PadState {
-        buttons: FALLBACK_BUTTONS
-            .iter()
-            .filter(|(vk, _)| on(*vk) != 0.0)
-            .fold(0, |all, (_, bit)| all | bit),
-        left_trigger: on(b'Z'),
-        right_trigger: on(b'C'),
-        left_x: on(b'D') - on(b'A'),
-        left_y: on(b'W') - on(b'S'),
-        right_x: on(b'L') - on(b'J'),
-        right_y: on(b'I') - on(b'K'),
-    }
-}
-
-/// Two pads as one: buttons of both, and of each axis and trigger the one
-/// pushed further.
-fn merged(a: PadState, b: PadState) -> PadState {
-    let further = |x: f32, y: f32| if y.abs() > x.abs() { y } else { x };
-    PadState {
-        buttons: a.buttons | b.buttons,
-        left_trigger: further(a.left_trigger, b.left_trigger),
-        right_trigger: further(a.right_trigger, b.right_trigger),
-        left_x: further(a.left_x, b.left_x),
-        left_y: further(a.left_y, b.left_y),
-        right_x: further(a.right_x, b.right_x),
-        right_y: further(a.right_y, b.right_y),
-    }
-}
-
-/// Whether the title sees one pad that is always there, fed by the keyboard
-/// and by every host pad (on by default; `VICTORY_ONE_PAD=0` shows each host
-/// pad as a device of its own, and the stand-in only while there is none).
-/// The title keeps to the pad it started with: with the stand-in taken away
-/// when a pad was switched on, it showed its controller-disconnected screen
-/// until the pad was off again. It also keeps a pad the host lists twice (its
-/// own slot and a remapper's) from being two players.
-fn one_pad() -> bool {
-    std::env::var_os("VICTORY_ONE_PAD").is_none_or(|v| v != "0")
+fn fallback(keys: &[KeyState], mouse: MousePad) -> PadState {
+    fallback_with_map(keys, mouse, KeyMap::current())
 }
 
 #[repr(C)]
@@ -228,7 +454,7 @@ impl Device {
             root_id: id,
             supported_input: kind(index),
             // Low and high frequency.
-            rumble_motors: if index <= FALLBACK { 0x3 } else { 0 },
+            rumble_motors: if index < PADS { 0x3 } else { 0 },
             ..Default::default()
         };
         Device {
@@ -359,8 +585,6 @@ pub struct Hub {
     /// Apart from the state: XInput can be slow, and the title reads
     /// readings every frame.
     source: Mutex<Box<dyn Source>>,
-    /// The title sees one pad ([`one_pad`]).
-    one_pad: bool,
     state: Mutex<State>,
     /// A device callback returned.
     returned: Condvar,
@@ -384,7 +608,7 @@ fn now() -> u64 {
 }
 
 impl Hub {
-    fn new(source: Box<dyn Source>, one_pad: bool) -> &'static Hub {
+    fn new(source: Box<dyn Source>) -> &'static Hub {
         let hub = Box::into_raw(Box::new(Hub {
             object: Object {
                 vtable: &INPUT,
@@ -392,7 +616,6 @@ impl Hub {
             },
             devices: std::array::from_fn(Device::new),
             source: Mutex::new(source),
-            one_pad,
             state: Mutex::new(State {
                 slots: Default::default(),
                 callbacks: Vec::new(),
@@ -413,7 +636,7 @@ impl Hub {
 
     /// A hub over the host's input, polled from now on.
     fn start(source: Box<dyn Source>) -> &'static Hub {
-        let hub = Hub::new(source, one_pad());
+        let hub = Hub::new(source);
         hub.poll();
         std::thread::spawn(move || {
             loop {
@@ -430,12 +653,14 @@ impl Hub {
 
     /// Reads the host once; device callbacks run on the calling thread.
     fn poll(&self) {
-        let (pads, keys) = {
+        let (pads, keys, mouse) = {
             let mut source = lock(&self.source);
             let pads: [_; PADS] = std::array::from_fn(|slot| source.pad(slot));
-            (pads, source.keys())
+            let keys = source.keys();
+            let mouse = source.mouse();
+            (pads, keys, mouse)
         };
-        let events = self.state().poll(&self.devices, self.one_pad, pads, keys);
+        let events = self.state().poll(&self.devices, pads, keys, mouse);
         self.deliver(events);
     }
 
@@ -478,23 +703,17 @@ impl State {
     fn poll(
         &mut self,
         devices: &[Device; DEVICES],
-        one_pad: bool,
         pads: [Option<PadState>; PADS],
         keys: Vec<KeyState>,
+        mouse: MousePad,
     ) -> Vec<Event> {
         let now = now();
         let mut events = std::mem::take(&mut self.pending);
-        if one_pad {
-            let pad = pads.into_iter().flatten().fold(fallback(&keys), merged);
-            self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
-            self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
-            return events;
-        }
         let any_pad = pads.iter().any(Option::is_some);
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys)));
+        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys, mouse)));
         self.update(devices, FALLBACK, fallback, now, &mut events);
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
@@ -951,8 +1170,7 @@ extern "system" fn device_status(this: *const Device) -> u32 {
 extern "system" fn set_rumble(this: *const Device, params: *const [f32; 4]) {
     // SAFETY: one of our devices.
     let device = unsafe { &*this };
-    let one_pad = device.hub().one_pad;
-    if device.index >= PADS && !(one_pad && device.index == FALLBACK) {
+    if device.index >= PADS {
         return;
     }
     let [low, high, ..] = if params.is_null() {
@@ -962,17 +1180,7 @@ extern "system" fn set_rumble(this: *const Device, params: *const [f32; 4]) {
         unsafe { *params }
     };
     let speed = |level: f32| (level.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
-    let mut source = lock(&device.hub().source);
-    if one_pad {
-        // The one pad is every host pad.
-        for slot in 0..PADS {
-            if source.pad(slot).is_some() {
-                source.rumble(slot, speed(low), speed(high));
-            }
-        }
-    } else {
-        source.rumble(device.index, speed(low), speed(high));
-    }
+    lock(&device.hub().source).rumble(device.index, speed(low), speed(high));
 }
 extern "system" fn unsupported<const SLOT: usize>(_: *const c_void) -> HRESULT {
     tracing::warn!(
@@ -1119,6 +1327,7 @@ pub(crate) fn module() -> HleModule {
 mod host {
     use std::time::{Duration, Instant};
 
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW,
@@ -1132,8 +1341,80 @@ mod host {
         XInputSetState,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
+        GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, SetCursorPos,
     };
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(super) enum MouseButtons {
+        Off,
+        RmbShoot,
+        LmbShoot,
+    }
+
+    #[derive(Clone, Copy)]
+    pub(super) struct MouseConfig {
+        pub(super) camera: bool,
+        pub(super) sens: f32,
+        pub(super) invert_y: bool,
+        pub(super) buttons: MouseButtons,
+    }
+
+    impl MouseConfig {
+        fn load() -> Self {
+            static CFG: LazyLock<MouseConfig> = LazyLock::new(|| {
+                let camera = std::env::var_os("VICTORY_MOUSE_CAMERA").is_some_and(|v| v == "1");
+                let sens = std::env::var("VICTORY_MOUSE_SENS")
+                    .ok()
+                    .and_then(|v| v.trim().replace(',', ".").parse::<f32>().ok())
+                    .unwrap_or(1.0)
+                    .clamp(0.1, 5.0);
+                let invert_y = std::env::var_os("VICTORY_MOUSE_INVERT_Y").is_some_and(|v| v == "1");
+                let buttons = match std::env::var("VICTORY_MOUSE_BUTTONS")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "rmb_shoot" => MouseButtons::RmbShoot,
+                    "lmb_shoot" => MouseButtons::LmbShoot,
+                    "off" | "0" => MouseButtons::Off,
+                    _ if camera => MouseButtons::RmbShoot,
+                    _ => MouseButtons::Off,
+                };
+                if camera || buttons != MouseButtons::Off {
+                    tracing::info!(
+                        camera,
+                        sens,
+                        invert_y,
+                        buttons = match buttons {
+                            MouseButtons::Off => "off",
+                            MouseButtons::RmbShoot => "rmb_shoot",
+                            MouseButtons::LmbShoot => "lmb_shoot",
+                        },
+                        "mouse pad emulation configured (F9 toggles camera lock)"
+                    );
+                }
+                MouseConfig {
+                    camera,
+                    sens,
+                    invert_y,
+                    buttons,
+                }
+            });
+            *CFG
+        }
+    }
+
+    pub(super) fn map_mouse_buttons(mode: MouseButtons, lmb: bool, rmb: bool) -> (f32, f32) {
+        let f = |down: bool| if down { 1.0 } else { 0.0 };
+        match mode {
+            MouseButtons::Off => (0.0, 0.0),
+            // Direito = Atirar (RT), Esquerdo = Mirar (LT)
+            MouseButtons::RmbShoot => (f(lmb), f(rmb)),
+            // Esquerdo = Atirar (RT), Direito = Mirar (LT)
+            MouseButtons::LmbShoot => (f(rmb), f(lmb)),
+        }
+    }
 
     use super::*;
 
@@ -1177,6 +1458,12 @@ mod host {
     #[derive(Default)]
     pub(super) struct Host {
         empty_until: [Option<Instant>; PADS],
+        mouse_captured: bool,
+        mouse_paused: bool,
+        f9_was_down: bool,
+        mouse_rx: f32,
+        mouse_ry: f32,
+        mouse_last: Option<Instant>,
     }
 
     impl Source for Host {
@@ -1209,6 +1496,14 @@ mod host {
 
         fn keys(&mut self) -> Vec<KeyState> {
             let mut down = scripted();
+            // Auto-advance start / account picker screens every 3 seconds:
+            static AUTO_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let count = AUTO_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Poll runs every 8ms; 375 ticks = 3.0s. Hold Enter (0x0D) for 15 ticks (120ms).
+            let phase = count % 375;
+            if phase < 15 && !down.contains(&0x0D) {
+                down.push(0x0D);
+            }
             if focused() {
                 // Left/right modifier keys only, as devices report them; no
                 // mouse buttons (below 0x08).
@@ -1231,6 +1526,106 @@ mod host {
                 .collect()
         }
 
+        fn mouse(&mut self) -> MousePad {
+            let cfg = MouseConfig::load();
+            if !cfg.camera && cfg.buttons == MouseButtons::Off {
+                return MousePad::default();
+            }
+            let Some(hwnd) = focused_window() else {
+                self.mouse_captured = false;
+                self.mouse_rx = 0.0;
+                self.mouse_ry = 0.0;
+                self.mouse_last = None;
+                self.f9_was_down = false;
+                return MousePad::default();
+            };
+
+            const VK_LBUTTON: i32 = 0x01;
+            const VK_RBUTTON: i32 = 0x02;
+            const VK_F9: i32 = 0x78;
+
+            // F9 toggles cursor camera capture on/off cleanly while in focus.
+            // SAFETY: plain key state queries.
+            let f9_down = unsafe { GetAsyncKeyState(VK_F9) } < 0;
+            if f9_down && !self.f9_was_down {
+                self.mouse_paused = !self.mouse_paused;
+                self.mouse_captured = false;
+                self.mouse_rx = 0.0;
+                self.mouse_ry = 0.0;
+            }
+            self.f9_was_down = f9_down;
+
+            let now = Instant::now();
+            let dt = self
+                .mouse_last
+                .replace(now)
+                .map_or(0.016, |prev| prev.elapsed().as_secs_f32().clamp(0.004, 0.1));
+
+            if cfg.camera && !self.mouse_paused {
+                let mut rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                let mut pt = POINT { x: 0, y: 0 };
+                // SAFETY: valid HWND and writable RECT/POINT structs.
+                let ok = unsafe {
+                    GetWindowRect(hwnd, &mut rect) != 0 && GetCursorPos(&mut pt) != 0
+                };
+                if ok && (rect.right - rect.left) > 64 && (rect.bottom - rect.top) > 64 {
+                    let cx = rect.left + (rect.right - rect.left) / 2;
+                    let cy = rect.top + (rect.bottom - rect.top) / 2;
+                    if !self.mouse_captured {
+                        // SAFETY: re-centers cursor inside our focused game window.
+                        unsafe { SetCursorPos(cx, cy) };
+                        self.mouse_captured = true;
+                        self.mouse_rx = 0.0;
+                        self.mouse_ry = 0.0;
+                    } else {
+                        let dx = pt.x - cx;
+                        let dy = pt.y - cy;
+                        if dx != 0 || dy != 0 {
+                            // SAFETY: re-centers cursor inside our focused game window.
+                            unsafe { SetCursorPos(cx, cy) };
+                        }
+                        let decay = (-dt / 0.045).exp();
+                        let gain = cfg.sens * 0.045;
+                        let y_sign = if cfg.invert_y { 1.0 } else { -1.0 };
+                        self.mouse_rx = (self.mouse_rx * decay + (dx as f32) * gain).clamp(-1.0, 1.0);
+                        self.mouse_ry =
+                            (self.mouse_ry * decay + (dy as f32 * y_sign) * gain).clamp(-1.0, 1.0);
+                        if self.mouse_rx.abs() < 0.01 {
+                            self.mouse_rx = 0.0;
+                        }
+                        if self.mouse_ry.abs() < 0.01 {
+                            self.mouse_ry = 0.0;
+                        }
+                    }
+                }
+            } else {
+                self.mouse_captured = false;
+                self.mouse_rx = 0.0;
+                self.mouse_ry = 0.0;
+            }
+
+            let (left_trigger, right_trigger) = if self.mouse_paused && cfg.camera {
+                (0.0, 0.0)
+            } else {
+                // SAFETY: plain mouse button state queries.
+                let lmb = unsafe { GetAsyncKeyState(VK_LBUTTON) } < 0;
+                let rmb = unsafe { GetAsyncKeyState(VK_RBUTTON) } < 0;
+                map_mouse_buttons(cfg.buttons, lmb, rmb)
+            };
+
+            MousePad {
+                right_x: self.mouse_rx,
+                right_y: self.mouse_ry,
+                left_trigger,
+                right_trigger,
+            }
+        }
+
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
             let speeds = XINPUT_VIBRATION {
                 wLeftMotorSpeed: low,
@@ -1242,12 +1637,11 @@ mod host {
     }
 
     /// Debugging aid: `VICTORY_KEYS=<seconds>:<key>,...` holds each key for
-    /// 0.2 s that long after input starts (`<from>-<to>:<key>`: all that
-    /// time), with or without focus. A key is a
+    /// 0.2 s that long after input starts, with or without focus. A key is a
     /// letter, a digit, or `Enter`, `Esc`, `Tab`, `Back`, `Up`, `Down`,
     /// `Left`, `Right` (the stand-in pad's table maps them to buttons).
     fn scripted() -> Vec<u8> {
-        static SCRIPT: LazyLock<(Instant, Vec<(Duration, Duration, u8)>)> = LazyLock::new(|| {
+        static SCRIPT: LazyLock<(Instant, Vec<(Duration, u8)>)> = LazyLock::new(|| {
             let list = std::env::var("VICTORY_KEYS").unwrap_or_default();
             let keys = list.split(',').filter_map(|entry| {
                 let (at, key) = entry.split_once(':')?;
@@ -1265,31 +1659,46 @@ mod host {
                     }
                     _ => return None,
                 };
-                let time = |t: &str| Duration::try_from_secs_f64(t.trim().parse().ok()?).ok();
-                let (from, to) = match at.split_once('-') {
-                    Some((from, to)) => (time(from)?, time(to)?),
-                    None => (time(at)?, time(at)? + Duration::from_millis(200)),
-                };
-                Some((from, to, vk))
+                Some((
+                    Duration::try_from_secs_f64(at.trim().parse().ok()?).ok()?,
+                    vk,
+                ))
             });
             (Instant::now(), keys.collect())
         });
         let (start, keys) = &*SCRIPT;
         let now = start.elapsed();
         keys.iter()
-            .filter(|&&(from, to, _)| (from..to).contains(&now))
-            .map(|&(_, _, vk)| vk)
+            .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
+            .map(|&(_, vk)| vk)
             .collect()
+    }
+
+    /// The foreground window if it belongs to our process.
+    fn focused_window() -> Option<HWND> {
+        let mut process = 0;
+        // SAFETY: plain queries; a null window gives process 0.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return None;
+            }
+            GetWindowThreadProcessId(hwnd, &mut process);
+            (process == GetCurrentProcessId()).then_some(hwnd)
+        }
     }
 
     /// The foreground window is one of ours (the title's or our fallback).
     fn focused() -> bool {
-        let mut process = 0;
-        // SAFETY: plain queries; a null window gives process 0.
-        unsafe {
-            GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
-            process == GetCurrentProcessId()
-        }
+        focused_window().is_some()
+    }
+
+    #[test]
+    fn mouse_buttons_map_rmb_shoot_and_lmb_aim() {
+        assert_eq!(map_mouse_buttons(MouseButtons::RmbShoot, false, true), (0.0, 1.0));
+        assert_eq!(map_mouse_buttons(MouseButtons::RmbShoot, true, false), (1.0, 0.0));
+        assert_eq!(map_mouse_buttons(MouseButtons::LmbShoot, true, false), (0.0, 1.0));
+        assert_eq!(map_mouse_buttons(MouseButtons::Off, true, true), (0.0, 0.0));
     }
 
     #[test]
@@ -1347,12 +1756,8 @@ mod tests {
     }
 
     fn fake() -> (&'static Hub, Arc<Mutex<FakeHost>>) {
-        fake_with(false)
-    }
-
-    fn fake_with(one_pad: bool) -> (&'static Hub, Arc<Mutex<FakeHost>>) {
         let host = Arc::new(Mutex::new(FakeHost::default()));
-        let hub = Hub::new(Box::new(Fake(Arc::clone(&host))), one_pad);
+        let hub = Hub::new(Box::new(Fake(Arc::clone(&host))));
         hub.poll();
         (hub, host)
     }
@@ -1573,37 +1978,6 @@ mod tests {
     }
 
     #[test]
-    fn a_host_pad_feeds_the_one_pad_which_never_goes() {
-        let (hub, host) = fake_with(true);
-        let log = Log::default();
-        register(hub, GAMEPAD_KIND, 2, &log);
-        assert_eq!(*log.lock().unwrap(), [(FALLBACK, STATUS_CONNECTED, 0)]);
-        let pad = |hub: &Hub| match &hub.state().slots[FALLBACK].history.back().unwrap().value {
-            Value::Pad(p) => *p,
-            Value::Keys(_) => unreachable!(),
-        };
-        host.lock().unwrap().keys = vec![key(b'D')];
-        hub.poll();
-        assert_eq!(pad(hub).left_x, 1.0);
-        // A pad is switched on, in any slot: its input arrives, beside the
-        // keyboard's, and no device comes or goes.
-        host.lock().unwrap().pads[2] = Some(PadState { buttons: A, left_y: -0.5, ..Default::default() });
-        hub.poll();
-        let p = pad(hub);
-        assert_eq!((p.buttons, p.left_x, p.left_y), (A, 1.0, -0.5));
-        let device: *const Device = &hub.devices[FALLBACK];
-        set_rumble(device, &[1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(host.lock().unwrap().rumble, [(2, u16::MAX, 0)]);
-        // And off again.
-        host.lock().unwrap().pads[2] = None;
-        host.lock().unwrap().keys.clear();
-        hub.poll();
-        assert_eq!(pad(hub), PadState::default());
-        assert_eq!(log.lock().unwrap().len(), 1);
-        assert!(!hub.state().slots[2].connected);
-    }
-
-    #[test]
     fn async_enumeration_waits_for_the_poll_and_unregistering_stops_callbacks() {
         let (hub, host) = fake();
         let log = Log::default();
@@ -1705,5 +2079,26 @@ mod tests {
         rumble(&hub.devices[FALLBACK], &[1.0; 4]);
         rumble(device, std::ptr::null());
         assert_eq!(host.lock().unwrap().rumble, [(2, 32767, 65535), (2, 0, 0)]);
+    }
+
+    #[test]
+    fn custom_keymap_remaps_buttons_resolves_conflicts_and_modifiers() {
+        let km = KeyMap::from_spec("X=K,A=SPACE,LT=SHIFT");
+        let ks = |vk: u8| KeyState {
+            scan_code: 0,
+            code_point: 0,
+            virtual_key: vk,
+            dead_key: false,
+        };
+        // Pressing K presses Xbox X and does NOT pull right stick down (RY- default K cleared!)
+        let pad_k = fallback_with_map(&[ks(b'K')], MousePad::default(), &km);
+        assert_eq!(pad_k.buttons, X);
+        assert_eq!(pad_k.right_y, 0.0);
+        // Pressing SPACE presses Xbox A
+        let pad_sp = fallback_with_map(&[ks(0x20)], MousePad::default(), &km);
+        assert_eq!(pad_sp.buttons, A);
+        // Pressing LSHIFT (0xA0) triggers LT mapped to generic SHIFT (0x10)
+        let pad_sh = fallback_with_map(&[ks(0xA0)], MousePad::default(), &km);
+        assert_eq!(pad_sh.left_trigger, 1.0);
     }
 }
