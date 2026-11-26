@@ -737,6 +737,7 @@ dependencies = [
  "memchr",
  "victory-core",
  "victory-game",
+ "victory-gpu",
  "victory-hle",
  "victory-loader",
  "victory-pe",
@@ -791,6 +792,7 @@ dependencies = [
 name = "victory-hle"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "opus-pure",
  "tempfile",
  "tracing",
@@ -810,6 +812,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "libc",
  "tempfile",
  "thiserror",
  "tracing",

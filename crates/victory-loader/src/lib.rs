@@ -27,6 +27,8 @@ mod console_insn;
 mod crash;
 #[cfg(not(windows))]
 mod unix;
+#[cfg(not(windows))]
+mod macos;
 pub mod prepare;
 pub(crate) mod publish;
 pub mod resolve;
@@ -44,6 +46,10 @@ mod thunks;
 mod tls;
 #[cfg(windows)]
 pub mod write_sites;
+#[cfg(not(windows))]
+pub mod write_sites {
+    pub unsafe fn apply_asked(_name: &str, _base: usize, _size: usize) {}
+}
 #[cfg(windows)]
 mod windows;
 
@@ -71,6 +77,11 @@ pub use thunks::{UnimplementedPolicy, unimplemented_call_count};
 #[cfg(windows)]
 pub use windows::{
     BindReport, LoadedImage, MissingImport, WithTitleDlls, load, load_title_dll, load_title_dlls,
+};
+#[cfg(not(windows))]
+pub use macos::{
+    BindReport, LoadedImage, MissingImport, UnimplementedPolicy, WithTitleDlls, load,
+    load_title_dll, load_title_dlls, unimplemented_call_count,
 };
 
 /// `DLL_PROCESS_ATTACH`, for TLS callbacks.

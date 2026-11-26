@@ -98,6 +98,10 @@ mod texback;
 pub mod metal_backend;
 #[cfg(target_os = "macos")]
 pub mod metal_presenter;
+#[cfg(target_os = "macos")]
+pub use metal_presenter::{MetalPresenter, create_native_window};
+#[cfg(target_os = "macos")]
+pub use metal_backend::{context, UnifiedBuffer};
 
 #[cfg(windows)]
 pub use host::on_failure;

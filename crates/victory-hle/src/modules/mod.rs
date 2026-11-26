@@ -18,10 +18,18 @@ pub mod dsp;
 pub mod dstorage;
 #[cfg(windows)]
 pub mod files;
+#[cfg(not(windows))]
+pub mod unix_files;
+#[cfg(not(windows))]
+pub use unix_files as files;
 pub mod gameinput;
 pub mod kernel;
 #[cfg(windows)]
 pub mod lifecycle;
+#[cfg(not(windows))]
+pub mod unix_lifecycle;
+#[cfg(not(windows))]
+pub use unix_lifecycle as lifecycle;
 #[cfg(windows)]
 pub mod media;
 #[cfg(windows)]
@@ -37,6 +45,10 @@ pub mod xgamesave;
 pub mod xgameui;
 #[cfg(windows)]
 pub mod xmem;
+#[cfg(not(windows))]
+pub mod unix_xmem;
+#[cfg(not(windows))]
+pub use unix_xmem as xmem;
 pub mod xnetworking;
 pub mod xpackage;
 pub mod xstore;
@@ -61,14 +73,11 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(media::module());
     #[cfg(windows)]
     all.push(dstorage::module());
-    #[cfg(windows)]
     all.push(files::module());
-    #[cfg(windows)]
     all.push(lifecycle::module());
     #[cfg(windows)]
     all.push(net::module());
     all.push(rpcrt4::module());
-    #[cfg(windows)]
     all.push(xmem::module());
     #[cfg(windows)]
     all.push(xsystem::module());

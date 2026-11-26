@@ -1,0 +1,12 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+EXE="/Volumes/ZALUPA/scarlet-americas/game_scarlett_master.exe"
+
+if [ ! -f "$EXE" ]; then
+    osascript -e 'display alert "GTA 6 Not Found" message "Please make sure /Volumes/ZALUPA/scarlet-americas/game_scarlett_master.exe is connected."'
+    exit 1
+fi
+
+export VICTORY_SKIP_CPU_CHECK=1
+export VICTORY_AB=0
+exec "$DIR/victory" run "$EXE" --execute

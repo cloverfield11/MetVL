@@ -111,3 +111,72 @@ impl MetalPresenter {
         Ok(())
     }
 }
+
+use objc::{class, msg_send, sel, sel_impl};
+use objc::runtime::{Object, YES, NO};
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
+}
+
+/// Creates a native macOS Cocoa window with an attached CAMetalLayer and initializes MetalPresenter.
+pub fn create_native_window(title: &str, width: u32, height: u32) -> Result<MetalPresenter, String> {
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let () = msg_send![app, setActivationPolicy: 0isize]; // NSApplicationActivationPolicyRegular
+
+        let rect = CGRect {
+            origin: CGPoint { x: 100.0, y: 100.0 },
+            size: CGSize { width: width as f64, height: height as f64 },
+        };
+
+        let window: *mut Object = msg_send![class!(NSWindow), alloc];
+        let style_mask: usize = 1 | 2 | 4 | 8; // Titled | Closable | Miniaturizable | Resizable
+        let backing_store_buffered: usize = 2;
+        let () = msg_send![
+            window,
+            initWithContentRect: rect
+            styleMask: style_mask
+            backing: backing_store_buffered
+            defer: NO
+        ];
+
+        let title_cls = class!(NSString);
+        let title_bytes = title.as_bytes();
+        let title_ns: *mut Object = msg_send![
+            title_cls,
+            stringWithBytes: title_bytes.as_ptr()
+            length: title_bytes.len()
+            encoding: 4usize // NSUTF8StringEncoding
+        ];
+        let () = msg_send![window, setTitle: title_ns];
+
+        let view: *mut Object = msg_send![window, contentView];
+        let () = msg_send![view, setWantsLayer: YES];
+
+        let layer = MetalLayer::new();
+        let () = msg_send![view, setLayer: layer.as_ref()];
+
+        let () = msg_send![window, center];
+        let () = msg_send![window, makeKeyAndOrderFront: std::ptr::null_mut::<Object>()];
+
+        MetalPresenter::new(layer, width, height)
+    }
+}

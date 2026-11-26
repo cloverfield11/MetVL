@@ -46,6 +46,9 @@ windows = { workspace = true, optional = true, features = [
 # `#[implement]` names it.
 windows-core = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile.workspace = true
 

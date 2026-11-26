@@ -4,15 +4,15 @@ use anyhow::{Context, Result};
 
 use crate::{Console, Unimplemented};
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const SKIP_CPU_CHECK_ENV: &str = "VICTORY_SKIP_CPU_CHECK";
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn skip_cpu_check(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn check_cpu_features_with(has_avx2: bool, skip_env: Option<&str>) -> Result<()> {
     if has_avx2 || skip_cpu_check(skip_env) {
         return Ok(());
@@ -25,7 +25,7 @@ fn check_cpu_features_with(has_avx2: bool, skip_env: Option<&str>) -> Result<()>
 
 /// Pre-flight check before executing title code: Xbox Series binaries are
 /// compiled for Zen 2 and require AVX2.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn check_cpu_features() -> Result<()> {
     #[cfg(target_arch = "x86_64")]
     let has_avx2 = std::arch::is_x86_feature_detected!("avx2");
@@ -35,7 +35,7 @@ fn check_cpu_features() -> Result<()> {
     check_cpu_features_with(has_avx2, skip.as_deref())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn run(
     exe: &Path,
     unimplemented: Unimplemented,
@@ -188,6 +188,14 @@ pub fn run(
     victory_hle::runtime::set_title_dll_loader(Box::new(move |file| {
         late.load(file, show).map_err(|e| format!("{e:#}"))
     }));
+    #[cfg(target_os = "macos")]
+    {
+        println!("display        initializing native Apple Metal window (1920x1080)...");
+        match victory_gpu::create_native_window("Grand Theft Auto VI - Americas (Apple Silicon Metal)", 1920, 1080) {
+            Ok(_) => println!("display        CAMetalLayer window active"),
+            Err(e) => eprintln!("display error: failed to create CAMetalLayer window: {e}"),
+        }
+    }
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { Arc::new(image).spawn_main(dlls)? };
     let code = main
@@ -282,7 +290,7 @@ fn poke(base: usize, size: usize) {
 }
 
 /// DLLs the host or our runtime provide are never taken from the title.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn title_dll(host: &victory_hle::HostPolicy, dll: &str) -> bool {
     !host.allows(dll) && !victory_hle::registry().iter().any(|m| m.serves(dll))
 }
@@ -290,7 +298,7 @@ fn title_dll(host: &victory_hle::HostPolicy, dll: &str) -> bool {
 /// The DLLs among `imported` (the main image's static imports) that must
 /// come from the title's folder (`wanted`) but were not mapped from it:
 /// none of their imports can be bound. Each named once, case ignored.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn absent_title_dlls(
     imported: &[&str],
     mapped: &[&str],
@@ -308,7 +316,7 @@ fn absent_title_dlls(
 
 /// Title DLLs the title loads itself (`LoadLibrary`) that nothing imports,
 /// e.g. The title's upscaler behind its FidelityFX loader.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 struct LateDlls {
     host: victory_hle::HostPolicy,
     title_dir: std::path::PathBuf,
@@ -319,7 +327,7 @@ struct LateDlls {
     lock: LoaderLock,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl LateDlls {
     /// Every `LoadLibrary` of the title comes here first. Returns a title
     /// image called `file`, mapping it and the title DLLs it needs first,
@@ -400,14 +408,14 @@ impl LateDlls {
 
 /// The Windows loader lock's shape: one thread at a time, re-entered by
 /// the thread that holds it.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Default)]
 struct LoaderLock {
     owner: std::sync::Mutex<(Option<std::thread::ThreadId>, usize)>,
     free: std::sync::Condvar,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl LoaderLock {
     fn hold<T>(&self, f: impl FnOnce() -> T) -> T {
         let me = std::thread::current().id();
@@ -528,7 +536,7 @@ mod cpu_check_tests {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console) -> Result<()> {
-    anyhow::bail!("running titles requires Windows")
+    anyhow::bail!("running titles requires Windows or macOS")
 }

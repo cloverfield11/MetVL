@@ -232,6 +232,9 @@ pub fn title() -> Title {
 /// Gives the process the console's millisecond timers. Titles pace
 /// themselves with short waits (the title's audio mixer sleeps
 /// about 4 ms per 5.3 ms block) and cannot tune the timer on the console;
+#[cfg(not(windows))]
+pub fn use_console_timers() {}
+
 /// a desktop process waits in 15.6 ms ticks unless it asks for finer ones,
 /// and Windows 11 drops that request while the window is hidden unless the
 /// process opts out. Process-wide, for the whole run.
