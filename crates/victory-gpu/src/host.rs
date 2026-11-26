@@ -405,7 +405,7 @@ fn ram_idle_for(avail_phys: Option<u64>, keep: bool) -> u64 {
 /// with one is held by its owner alone: no descriptor slot keeps it
 /// (`HostHeap::kept`) and no list (`HostList::keep`).
 pub(crate) fn references(object: &impl Interface) -> u32 {
-    type Method = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
+    type Method = unsafe extern "win64" fn(*mut std::ffi::c_void) -> u32;
     let raw = object.as_raw();
     // SAFETY: a live COM object, whose first three methods are those of
     // `IUnknown` (query, add a reference, release one); the pair leaves the
@@ -8436,7 +8436,7 @@ fn read(src: *const u8, dst: *mut u8, len: usize) -> bool {
 }
 
 #[link(name = "ntdll", kind = "raw-dylib")]
-unsafe extern "system" {
+unsafe extern "win64" {
     /// The kernel's write into a process's memory, `(process, address,
     /// bytes, length, written out)`: an NTSTATUS, negative when a page of
     /// the range is not there or not writable. It changes no protection.
@@ -9323,7 +9323,7 @@ impl Host {
 /// A visible top-level window of this process: the one the title made, if
 /// it made one.
 fn title_window() -> Option<HWND> {
-    extern "system" fn visit(hwnd: HWND, found: LPARAM) -> windows::core::BOOL {
+    extern "win64" fn visit(hwnd: HWND, found: LPARAM) -> windows::core::BOOL {
         let mut process = 0;
         // SAFETY: a window handle from the enumeration; `found` is ours.
         unsafe {
@@ -9785,7 +9785,7 @@ fn window(width: u32, height: u32) -> windows::core::Result<HWND> {
     Ok(HWND(hwnd as *mut _))
 }
 
-extern "system" fn window_proc(
+extern "win64" fn window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,

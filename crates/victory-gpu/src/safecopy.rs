@@ -136,7 +136,7 @@ std::arch::global_asm!(
     "ret",
 );
 
-unsafe extern "system" {
+unsafe extern "win64" {
     fn victory_safe_copy(dst: *mut u8, src: *const u8, len: usize) -> u32;
     fn victory_safe_copy_at();
     fn victory_safe_copy_after();

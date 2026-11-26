@@ -29,10 +29,10 @@ macro_rules! wrapped {
         mod wrappers {
             use super::*;
             $(
-                pub(super) unsafe extern "system" fn $name($($arg: $type),*) $(-> $result)? {
+                pub(super) unsafe extern "win64" fn $name($($arg: $type),*) $(-> $result)? {
                     // SAFETY: the function of that name, as the system has it
                     // (or the module the title imports it from).
-                    let real: unsafe extern "system" fn($($type),*) $(-> $result)? =
+                    let real: unsafe extern "win64" fn($($type),*) $(-> $result)? =
                         unsafe { std::mem::transmute(TABLE[$index].1.load(Ordering::Relaxed)) };
                     if !on() {
                         // SAFETY: the caller's own call.
@@ -90,7 +90,7 @@ fn lock_of(name: &'static str, lock: Handle, take: &str, call: impl FnOnce()) {
     if take != 0 {
         // SAFETY: `TryEnterCriticalSection` or a `TryAcquireSRWLock` call:
         // one pointer, a truth value (one byte of it for the latter).
-        let taken = unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(Handle) -> u8>(take)(lock) };
+        let taken = unsafe { std::mem::transmute::<usize, unsafe extern "win64" fn(Handle) -> u8>(take)(lock) };
         if taken != 0 {
             return;
         }
@@ -105,111 +105,111 @@ fn released(name: &'static str, object: Handle) {
 }
 
 wrapped! {
-    0 WaitForSingleObject(object: Handle, ms: u32) -> u32 => |real: unsafe extern "system" fn(Handle, u32) -> u32| {
+    0 WaitForSingleObject(object: Handle, ms: u32) -> u32 => |real: unsafe extern "win64" fn(Handle, u32) -> u32| {
         // SAFETY: the caller's own call (so below).
         wait("WaitForSingleObject", object as u64, || unsafe { real(object, ms) })
     };
-    1 WaitForSingleObjectEx(object: Handle, ms: u32, alertable: i32) -> u32 => |real: unsafe extern "system" fn(Handle, u32, i32) -> u32| {
+    1 WaitForSingleObjectEx(object: Handle, ms: u32, alertable: i32) -> u32 => |real: unsafe extern "win64" fn(Handle, u32, i32) -> u32| {
         wait("WaitForSingleObjectEx", object as u64, || unsafe { real(object, ms, alertable) })
     };
-    2 Sleep(ms: u32) => |real: unsafe extern "system" fn(u32)| {
+    2 Sleep(ms: u32) => |real: unsafe extern "win64" fn(u32)| {
         wait("Sleep", 0, || unsafe { real(ms) })
     };
-    3 SleepEx(ms: u32, alertable: i32) -> u32 => |real: unsafe extern "system" fn(u32, i32) -> u32| {
+    3 SleepEx(ms: u32, alertable: i32) -> u32 => |real: unsafe extern "win64" fn(u32, i32) -> u32| {
         wait("SleepEx", 0, || unsafe { real(ms, alertable) })
     };
-    4 SetEvent(object: Handle) -> i32 => |real: unsafe extern "system" fn(Handle) -> i32| {
+    4 SetEvent(object: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle) -> i32| {
         woken("SetEvent", object as u64);
         unsafe { real(object) }
     };
-    5 ReleaseSemaphore(object: Handle, count: i32, before: *mut i32) -> i32 => |real: unsafe extern "system" fn(Handle, i32, *mut i32) -> i32| {
+    5 ReleaseSemaphore(object: Handle, count: i32, before: *mut i32) -> i32 => |real: unsafe extern "win64" fn(Handle, i32, *mut i32) -> i32| {
         woken("ReleaseSemaphore", object as u64);
         unsafe { real(object, count, before) }
     };
-    6 ReleaseMutex(object: Handle) -> i32 => |real: unsafe extern "system" fn(Handle) -> i32| {
+    6 ReleaseMutex(object: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle) -> i32| {
         woken("ReleaseMutex", object as u64);
         unsafe { real(object) }
     };
-    7 EnterCriticalSection(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    7 EnterCriticalSection(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         lock_of("EnterCriticalSection", lock, "TryEnterCriticalSection", || unsafe { real(lock) })
     };
-    8 LeaveCriticalSection(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    8 LeaveCriticalSection(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("LeaveCriticalSection", lock);
         unsafe { real(lock) }
     };
-    9 AcquireSRWLockExclusive(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    9 AcquireSRWLockExclusive(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         lock_of("AcquireSRWLockExclusive", lock, "TryAcquireSRWLockExclusive", || unsafe { real(lock) })
     };
-    10 ReleaseSRWLockExclusive(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    10 ReleaseSRWLockExclusive(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("ReleaseSRWLockExclusive", lock);
         unsafe { real(lock) }
     };
-    11 AcquireSRWLockShared(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    11 AcquireSRWLockShared(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         lock_of("AcquireSRWLockShared", lock, "TryAcquireSRWLockShared", || unsafe { real(lock) })
     };
-    12 ReleaseSRWLockShared(lock: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    12 ReleaseSRWLockShared(lock: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("ReleaseSRWLockShared", lock);
         unsafe { real(lock) }
     };
-    13 WaitOnAddress(at: Handle, compare: Handle, size: usize, ms: u32) -> i32 => |real: unsafe extern "system" fn(Handle, Handle, usize, u32) -> i32| {
+    13 WaitOnAddress(at: Handle, compare: Handle, size: usize, ms: u32) -> i32 => |real: unsafe extern "win64" fn(Handle, Handle, usize, u32) -> i32| {
         wait("WaitOnAddress", at as u64, || unsafe { real(at, compare, size, ms) })
     };
-    14 WakeByAddressSingle(at: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    14 WakeByAddressSingle(at: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("WakeByAddressSingle", at);
         unsafe { real(at) }
     };
-    15 WakeByAddressAll(at: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    15 WakeByAddressAll(at: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("WakeByAddressAll", at);
         unsafe { real(at) }
     };
-    16 SleepConditionVariableSRW(at: Handle, lock: Handle, ms: u32, flags: u32) -> i32 => |real: unsafe extern "system" fn(Handle, Handle, u32, u32) -> i32| {
+    16 SleepConditionVariableSRW(at: Handle, lock: Handle, ms: u32, flags: u32) -> i32 => |real: unsafe extern "win64" fn(Handle, Handle, u32, u32) -> i32| {
         wait("SleepConditionVariableSRW", at as u64, || unsafe { real(at, lock, ms, flags) })
     };
-    17 SleepConditionVariableCS(at: Handle, lock: Handle, ms: u32) -> i32 => |real: unsafe extern "system" fn(Handle, Handle, u32) -> i32| {
+    17 SleepConditionVariableCS(at: Handle, lock: Handle, ms: u32) -> i32 => |real: unsafe extern "win64" fn(Handle, Handle, u32) -> i32| {
         wait("SleepConditionVariableCS", at as u64, || unsafe { real(at, lock, ms) })
     };
-    18 WakeConditionVariable(at: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    18 WakeConditionVariable(at: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("WakeConditionVariable", at);
         unsafe { real(at) }
     };
-    19 WakeAllConditionVariable(at: Handle) => |real: unsafe extern "system" fn(Handle)| {
+    19 WakeAllConditionVariable(at: Handle) => |real: unsafe extern "win64" fn(Handle)| {
         released("WakeAllConditionVariable", at);
         unsafe { real(at) }
     };
-    20 WaitForMultipleObjects(count: u32, objects: *const Handle, all: i32, ms: u32) -> u32 => |real: unsafe extern "system" fn(u32, *const Handle, i32, u32) -> u32| {
+    20 WaitForMultipleObjects(count: u32, objects: *const Handle, all: i32, ms: u32) -> u32 => |real: unsafe extern "win64" fn(u32, *const Handle, i32, u32) -> u32| {
         // (Named by the first of them.)
         // SAFETY: the caller passes `count` handles.
         let first = if count > 0 && !objects.is_null() { (unsafe { *objects }) as u64 } else { 0 };
         wait("WaitForMultipleObjects", first, || unsafe { real(count, objects, all, ms) })
     };
-    21 GetWriteWatch(flags: u32, at: Handle, size: usize, found: Handle, count: Handle, granularity: Handle) -> u32 => |real: unsafe extern "system" fn(u32, Handle, usize, Handle, Handle, Handle) -> u32| {
+    21 GetWriteWatch(flags: u32, at: Handle, size: usize, found: Handle, count: Handle, granularity: Handle) -> u32 => |real: unsafe extern "win64" fn(u32, Handle, usize, Handle, Handle, Handle) -> u32| {
         measured("GetWriteWatch", size, || unsafe { real(flags, at, size, found, count, granularity) })
     };
-    22 VirtualProtect(at: Handle, size: usize, new: u32, old: Handle) -> i32 => |real: unsafe extern "system" fn(Handle, usize, u32, Handle) -> i32| {
+    22 VirtualProtect(at: Handle, size: usize, new: u32, old: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle, usize, u32, Handle) -> i32| {
         measured("VirtualProtect", size, || unsafe { real(at, size, new, old) })
     };
-    23 ReadProcessMemory(process: Handle, at: Handle, to: Handle, size: usize, done: Handle) -> i32 => |real: unsafe extern "system" fn(Handle, Handle, Handle, usize, Handle) -> i32| {
+    23 ReadProcessMemory(process: Handle, at: Handle, to: Handle, size: usize, done: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle, Handle, Handle, usize, Handle) -> i32| {
         measured("ReadProcessMemory", size, || unsafe { real(process, at, to, size, done) })
     };
-    24 VirtualQuery(at: Handle, info: Handle, size: usize) -> usize => |real: unsafe extern "system" fn(Handle, Handle, usize) -> usize| {
+    24 VirtualQuery(at: Handle, info: Handle, size: usize) -> usize => |real: unsafe extern "win64" fn(Handle, Handle, usize) -> usize| {
         measured("VirtualQuery", 0, || unsafe { real(at, info, size) })
     };
-    25 VirtualAlloc(at: Handle, size: usize, kind: u32, protect: u32) -> Handle => |real: unsafe extern "system" fn(Handle, usize, u32, u32) -> Handle| {
+    25 VirtualAlloc(at: Handle, size: usize, kind: u32, protect: u32) -> Handle => |real: unsafe extern "win64" fn(Handle, usize, u32, u32) -> Handle| {
         measured("VirtualAlloc", size, || unsafe { real(at, size, kind, protect) })
     };
-    26 VirtualFree(at: Handle, size: usize, kind: u32) -> i32 => |real: unsafe extern "system" fn(Handle, usize, u32) -> i32| {
+    26 VirtualFree(at: Handle, size: usize, kind: u32) -> i32 => |real: unsafe extern "win64" fn(Handle, usize, u32) -> i32| {
         measured("VirtualFree", size, || unsafe { real(at, size, kind) })
     };
-    27 _Mtx_lock(lock: Handle) -> i32 => |real: unsafe extern "system" fn(Handle) -> i32| {
+    27 _Mtx_lock(lock: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle) -> i32| {
         wait("_Mtx_lock", lock as u64, || unsafe { real(lock) })
     };
-    28 _Mtx_unlock(lock: Handle) -> i32 => |real: unsafe extern "system" fn(Handle) -> i32| {
+    28 _Mtx_unlock(lock: Handle) -> i32 => |real: unsafe extern "win64" fn(Handle) -> i32| {
         released("_Mtx_unlock", lock);
         unsafe { real(lock) }
     };
-    29 TryEnterCriticalSection(lock: Handle) -> u8 => |real: unsafe extern "system" fn(Handle) -> u8| unsafe { real(lock) };
-    30 TryAcquireSRWLockExclusive(lock: Handle) -> u8 => |real: unsafe extern "system" fn(Handle) -> u8| unsafe { real(lock) };
-    31 TryAcquireSRWLockShared(lock: Handle) -> u8 => |real: unsafe extern "system" fn(Handle) -> u8| unsafe { real(lock) };
+    29 TryEnterCriticalSection(lock: Handle) -> u8 => |real: unsafe extern "win64" fn(Handle) -> u8| unsafe { real(lock) };
+    30 TryAcquireSRWLockExclusive(lock: Handle) -> u8 => |real: unsafe extern "win64" fn(Handle) -> u8| unsafe { real(lock) };
+    31 TryAcquireSRWLockShared(lock: Handle) -> u8 => |real: unsafe extern "win64" fn(Handle) -> u8| unsafe { real(lock) };
 }
 
 /// The wrappers from here on are there for their real functions only.

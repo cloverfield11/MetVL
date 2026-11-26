@@ -214,7 +214,7 @@ pub(super) fn count(class: usize, slot: usize) -> u64 {
 /// [`COUNTS`] and goes on to the object's own. Any arguments pass as they
 /// are: only the scratch register `rax` is used.
 #[unsafe(naked)]
-unsafe extern "system" fn noted<const AT: usize>() {
+unsafe extern "win64" fn noted<const AT: usize>() {
     core::arch::naked_asm!(
         "lock inc qword ptr [rip + {counts} + {at} * 8]",
         "mov rax, [rcx]",
@@ -255,7 +255,7 @@ mod tests {
         value: u64,
     }
 
-    unsafe extern "system" fn add(
+    unsafe extern "win64" fn add(
         this: *mut c_void,
         a: u64,
         b: u64,
@@ -267,9 +267,9 @@ mod tests {
         unsafe { (*this.cast::<Object>()).value + a + b + c + d + e as u64 }
     }
 
-    type Add = unsafe extern "system" fn(*mut c_void, u64, u64, u64, u64, f64) -> u64;
+    type Add = unsafe extern "win64" fn(*mut c_void, u64, u64, u64, u64, f64) -> u64;
 
-    unsafe extern "system" fn double(
+    unsafe extern "win64" fn double(
         this: *mut c_void,
         a: u64,
         b: u64,

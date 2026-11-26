@@ -1,14 +1,27 @@
 //! Native Metal presentation layer and CAMetalLayer presenter for Americas on macOS.
 
-use std::sync::Arc;
+use std::sync::OnceLock;
 use metal::*;
-use crate::metal_backend::{context, UnifiedBuffer};
+use objc::{class, msg_send, sel, sel_impl};
+use objc::runtime::{Object, YES, NO};
+use crate::metal_backend::context;
+use crate::resource::ResourceDesc;
 
 pub struct MetalPresenter {
     pub layer: MetalLayer,
     pub width: u32,
     pub height: u32,
     pub pipeline: RenderPipelineState,
+    pub scene_texture: Texture,
+}
+
+unsafe impl Send for MetalPresenter {}
+unsafe impl Sync for MetalPresenter {}
+
+static PRESENTER: OnceLock<MetalPresenter> = OnceLock::new();
+
+pub fn get_presenter() -> Option<&'static MetalPresenter> {
+    PRESENTER.get()
 }
 
 const BLIT_SHADER: &str = r#"
@@ -63,12 +76,89 @@ impl MetalPresenter {
             .new_render_pipeline_state(&pipeline_desc)
             .map_err(|e| format!("Failed to create render pipeline: {e}"))?;
 
+        let tex_desc = TextureDescriptor::new();
+        tex_desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        tex_desc.set_width(width as u64);
+        tex_desc.set_height(height as u64);
+        tex_desc.set_usage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+        tex_desc.set_storage_mode(MTLStorageMode::Shared);
+        let scene_texture = ctx.device.new_texture(&tex_desc);
+
+        // Pre-fill initial frame with dark slate/blue so window is immediately visually active
+        let mut initial_pixels = vec![0u8; (width * height * 4) as usize];
+        for pixel in initial_pixels.chunks_exact_mut(4) {
+            pixel[0] = 32;  // B
+            pixel[1] = 24;  // G
+            pixel[2] = 20;  // R
+            pixel[3] = 255; // A
+        }
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
+        };
+        scene_texture.replace_region(region, 0, initial_pixels.as_ptr().cast(), (width * 4) as u64);
+
         Ok(MetalPresenter {
             layer,
             width,
             height,
             pipeline,
+            scene_texture,
         })
+    }
+
+    /// Presents a frame given optional framebuffer memory and description.
+    pub fn present_frame(
+        &self,
+        buffer_ptr: Option<*const u8>,
+        desc: Option<ResourceDesc>,
+    ) -> Result<(), String> {
+        if let (Some(data), Some(desc)) = (buffer_ptr, desc) {
+            if !data.is_null() && desc.width > 0 && desc.height > 0 {
+                let w = (desc.width as u32).min(self.width);
+                let h = desc.height.min(self.height);
+                let region = MTLRegion {
+                    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                    size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
+                };
+                let bytes_per_row = (desc.width as u64) * 4;
+                self.scene_texture.replace_region(
+                    region,
+                    0,
+                    data.cast(),
+                    bytes_per_row,
+                );
+            }
+        }
+
+        let drawable = self.layer.next_drawable().ok_or("Failed to get next Metal drawable")?;
+        let ctx = context();
+        let cmd = ctx.queue.new_command_buffer();
+
+        let pass_desc = RenderPassDescriptor::new();
+        let color_attachment = pass_desc.color_attachments().object_at(0).unwrap();
+        color_attachment.set_texture(Some(drawable.texture()));
+        color_attachment.set_load_action(MTLLoadAction::Clear);
+        color_attachment.set_store_action(MTLStoreAction::Store);
+        color_attachment.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+
+        let encoder = cmd.new_render_command_encoder(&pass_desc);
+        encoder.set_render_pipeline_state(&self.pipeline);
+        encoder.set_fragment_texture(0, Some(&self.scene_texture));
+        encoder.set_fragment_texture(1, Some(&self.scene_texture));
+
+        let sampler_desc = SamplerDescriptor::new();
+        sampler_desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
+        sampler_desc.set_mag_filter(MTLSamplerMinMagFilter::Linear);
+        let sampler = ctx.device.new_sampler(&sampler_desc);
+        encoder.set_fragment_sampler_state(0, Some(&sampler));
+
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        encoder.end_encoding();
+
+        cmd.present_drawable(drawable);
+        cmd.commit();
+        Ok(())
     }
 
     /// Renders base 3D scene and UI overlay planes directly to CAMetalLayer drawable.
@@ -112,8 +202,10 @@ impl MetalPresenter {
     }
 }
 
-use objc::{class, msg_send, sel, sel_impl};
-use objc::runtime::{Object, YES, NO};
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {
+    fn NSApplicationLoad() -> u8;
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -137,8 +229,12 @@ struct CGRect {
 }
 
 /// Creates a native macOS Cocoa window with an attached CAMetalLayer and initializes MetalPresenter.
-pub fn create_native_window(title: &str, width: u32, height: u32) -> Result<MetalPresenter, String> {
+pub fn create_native_window(title: &str, width: u32, height: u32) -> Result<(), String> {
+    if PRESENTER.get().is_some() {
+        return Ok(());
+    }
     unsafe {
+        NSApplicationLoad();
         let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
         let () = msg_send![app, setActivationPolicy: 0isize]; // NSApplicationActivationPolicyRegular
 
@@ -174,9 +270,56 @@ pub fn create_native_window(title: &str, width: u32, height: u32) -> Result<Meta
         let layer = MetalLayer::new();
         let () = msg_send![view, setLayer: layer.as_ref()];
 
+        let _: *mut Object = msg_send![window, retain];
         let () = msg_send![window, center];
         let () = msg_send![window, makeKeyAndOrderFront: std::ptr::null_mut::<Object>()];
+        let () = msg_send![window, orderFrontRegardless];
+        let () = msg_send![app, finishLaunching];
+        let () = msg_send![app, activateIgnoringOtherApps: YES];
 
-        MetalPresenter::new(layer, width, height)
+        let presenter = MetalPresenter::new(layer, width, height)?;
+        let _ = PRESENTER.set(presenter);
+
+        let pool: *mut Object = msg_send![class!(NSAutoreleasePool), alloc];
+        let pool: *mut Object = msg_send![pool, init];
+        let () = msg_send![app, updateWindows];
+        let () = msg_send![pool, drain];
+
+        Ok(())
+    }
+}
+
+/// Pumps macOS AppKit Cocoa events on the main thread until the worker thread finishes.
+pub fn pump_cocoa_events_until(
+    main: std::thread::JoinHandle<anyhow::Result<u32>>,
+) -> anyhow::Result<u32> {
+    unsafe {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let title_cls = class!(NSString);
+        let run_loop_bytes = b"kCFRunLoopDefaultMode\0";
+        let run_loop_mode: *mut Object = msg_send![
+            title_cls,
+            stringWithUTF8String: run_loop_bytes.as_ptr()
+        ];
+        let date_class = class!(NSDate);
+        while !main.is_finished() {
+            let pool: *mut Object = msg_send![class!(NSAutoreleasePool), alloc];
+            let pool: *mut Object = msg_send![pool, init];
+
+            let until_date: *mut Object = msg_send![date_class, dateWithTimeIntervalSinceNow: 0.016f64];
+            let event: *mut Object = msg_send![
+                app,
+                nextEventMatchingMask: usize::MAX
+                untilDate: until_date
+                inMode: run_loop_mode
+                dequeue: YES
+            ];
+            if !event.is_null() {
+                let () = msg_send![app, sendEvent: event];
+                let () = msg_send![app, updateWindows];
+            }
+            let () = msg_send![pool, drain];
+        }
+        main.join().map_err(|_| anyhow::anyhow!("title main thread panicked"))?
     }
 }

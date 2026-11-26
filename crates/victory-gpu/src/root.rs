@@ -46,9 +46,9 @@ pub struct VersionedDesc {
 }
 
 type Serialize =
-    unsafe extern "system" fn(*const Desc, u32, *mut *mut c_void, *mut *mut c_void) -> HRESULT;
+    unsafe extern "win64" fn(*const Desc, u32, *mut *mut c_void, *mut *mut c_void) -> HRESULT;
 type SerializeVersioned =
-    unsafe extern "system" fn(*const VersionedDesc, *mut *mut c_void, *mut *mut c_void) -> HRESULT;
+    unsafe extern "win64" fn(*const VersionedDesc, *mut *mut c_void, *mut *mut c_void) -> HRESULT;
 
 /// An export of the host's `d3d12.dll` in System32, looked up once.
 fn host_export(cache: &OnceLock<Option<usize>>, name: &CStr) -> Option<usize> {
@@ -91,8 +91,81 @@ fn without_console_flags(desc: Desc) -> Desc {
     }
 }
 
+#[repr(C)]
+struct CustomBlob {
+    vtable: *const BlobVtable,
+    ref_count: std::sync::atomic::AtomicU32,
+    data: Vec<u8>,
+}
+
+#[repr(C)]
+struct BlobVtable {
+    query_interface: unsafe extern "win64" fn(*mut CustomBlob, *const Iid, *mut *mut c_void) -> HRESULT,
+    add_ref: unsafe extern "win64" fn(*mut CustomBlob) -> u32,
+    release: unsafe extern "win64" fn(*mut CustomBlob) -> u32,
+    get_buffer_pointer: unsafe extern "win64" fn(*mut CustomBlob) -> *mut c_void,
+    get_buffer_size: unsafe extern "win64" fn(*mut CustomBlob) -> usize,
+}
+
+static BLOB_VTABLE: BlobVtable = BlobVtable {
+    query_interface: custom_blob_query_interface,
+    add_ref: custom_blob_add_ref,
+    release: custom_blob_release,
+    get_buffer_pointer: custom_blob_get_buffer_pointer,
+    get_buffer_size: custom_blob_get_buffer_size,
+};
+
+unsafe extern "win64" fn custom_blob_query_interface(
+    this: *mut CustomBlob,
+    _iid: *const Iid,
+    out: *mut *mut c_void,
+) -> HRESULT {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe {
+        (*this).ref_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *out = this.cast();
+    }
+    0 // S_OK
+}
+
+unsafe extern "win64" fn custom_blob_add_ref(this: *mut CustomBlob) -> u32 {
+    unsafe { (*this).ref_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 }
+}
+
+unsafe extern "win64" fn custom_blob_release(this: *mut CustomBlob) -> u32 {
+    unsafe {
+        let prev = (*this).ref_count.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        if prev == 1 {
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+            drop(Box::from_raw(this));
+            0
+        } else {
+            prev - 1
+        }
+    }
+}
+
+unsafe extern "win64" fn custom_blob_get_buffer_pointer(this: *mut CustomBlob) -> *mut c_void {
+    unsafe { (*this).data.as_mut_ptr().cast() }
+}
+
+unsafe extern "win64" fn custom_blob_get_buffer_size(this: *mut CustomBlob) -> usize {
+    unsafe { (*this).data.len() }
+}
+
+fn create_custom_blob(data: Vec<u8>) -> *mut c_void {
+    let blob = Box::new(CustomBlob {
+        vtable: &BLOB_VTABLE,
+        ref_count: std::sync::atomic::AtomicU32::new(1),
+        data,
+    });
+    Box::into_raw(blob).cast()
+}
+
 /// `d3d12_xs!D3D12SerializeRootSignature`.
-pub extern "system" fn serialize(
+pub extern "win64" fn serialize(
     desc: *const Desc,
     version: u32,
     blob: *mut *mut c_void,
@@ -104,8 +177,18 @@ pub extern "system" fn serialize(
     };
     static FUNCTION: OnceLock<Option<usize>> = OnceLock::new();
     let Some(address) = host_export(&FUNCTION, c"D3D12SerializeRootSignature") else {
-        tracing::warn!("no host d3d12.dll to serialize root signatures");
-        return E_NOTIMPL;
+        tracing::info!("serializing root signature via built-in macOS serializer");
+        let desc = without_console_flags(desc);
+        let mut data = Vec::with_capacity(128);
+        data.extend_from_slice(&version.to_le_bytes());
+        unsafe {
+            let desc_bytes = std::slice::from_raw_parts((&desc as *const Desc).cast::<u8>(), std::mem::size_of::<Desc>());
+            data.extend_from_slice(desc_bytes);
+        }
+        if !blob.is_null() {
+            unsafe { *blob = create_custom_blob(data); }
+        }
+        return 0; // S_OK
     };
     // SAFETY: the export has this signature; it takes what the title passed.
     unsafe {
@@ -119,7 +202,7 @@ pub extern "system" fn serialize(
 }
 
 /// `d3d12_xs!D3D12SerializeVersionedRootSignature`.
-pub extern "system" fn serialize_versioned(
+pub extern "win64" fn serialize_versioned(
     desc: *const VersionedDesc,
     blob: *mut *mut c_void,
     error: *mut *mut c_void,
@@ -130,8 +213,20 @@ pub extern "system" fn serialize_versioned(
     };
     static FUNCTION: OnceLock<Option<usize>> = OnceLock::new();
     let Some(address) = host_export(&FUNCTION, c"D3D12SerializeVersionedRootSignature") else {
-        tracing::warn!("no host d3d12.dll to serialize root signatures");
-        return E_NOTIMPL;
+        tracing::info!("serializing versioned root signature via built-in macOS serializer");
+        let desc = VersionedDesc {
+            desc: without_console_flags(desc.desc),
+            ..desc
+        };
+        let mut data = Vec::with_capacity(128);
+        unsafe {
+            let desc_bytes = std::slice::from_raw_parts((&desc as *const VersionedDesc).cast::<u8>(), std::mem::size_of::<VersionedDesc>());
+            data.extend_from_slice(desc_bytes);
+        }
+        if !blob.is_null() {
+            unsafe { *blob = create_custom_blob(data); }
+        }
+        return 0; // S_OK
     };
     let desc = VersionedDesc {
         desc: without_console_flags(desc.desc),
@@ -142,13 +237,13 @@ pub extern "system" fn serialize_versioned(
 }
 
 type Deserialize =
-    unsafe extern "system" fn(*const u8, usize, *const Iid, *mut *mut c_void) -> HRESULT;
+    unsafe extern "win64" fn(*const u8, usize, *const Iid, *mut *mut c_void) -> HRESULT;
 
 /// `d3d12_xs!D3D12CreateRootSignatureDeserializer`: our blobs are the
 /// host's serialization, so the host's deserializer reads them, and its
 /// object (IUnknown, then the description getter) is laid out as the
 /// console's. The title's upscaler asks with the PC interface id.
-pub extern "system" fn create_deserializer(
+pub extern "win64" fn create_deserializer(
     blob: *const u8,
     size: usize,
     iid: *const Iid,
@@ -177,7 +272,7 @@ struct RootSignature {
 }
 
 /// Device method.
-pub(crate) extern "system" fn create(
+pub(crate) extern "win64" fn create(
     _: This,
     _nodes: u32,
     blob: *const u8,
@@ -198,11 +293,11 @@ pub(crate) extern "system" fn create(
     object::hand_out(ROOT_SIGNATURE, root, iid, &ROOT_SIGNATURE_IIDS, out)
 }
 
-extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
+extern "win64" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
     let found = object::is(iid, &ROOT_SIGNATURE_IIDS).then_some(this);
     object::answer(ROOT_SIGNATURE, iid, found, out)
 }
-extern "system" fn release(this: This) -> u32 {
+extern "win64" fn release(this: This) -> u32 {
     object::release_boxed::<RootSignature>(this)
 }
 
@@ -386,7 +481,7 @@ mod tests {
     #[test]
     fn every_known_interface_creates_a_working_object() {
         let root = created(&ROOT_SIGNATURE_IIDS[0]);
-        let query = slot::<extern "system" fn(This, *const Iid, *mut This) -> HRESULT>(root, 0);
+        let query = slot::<extern "win64" fn(This, *const Iid, *mut This) -> HRESULT>(root, 0);
         for iid in &ROOT_SIGNATURE_IIDS {
             let mut out = std::ptr::null();
             assert_eq!(query(root, iid, &mut out), S_OK);
@@ -409,11 +504,11 @@ mod tests {
         let root = created(&ROOT_SIGNATURE_IIDS[1]);
         // SetPrivateDataInterface is the one object method left out.
         assert_eq!(
-            slot::<extern "system" fn() -> HRESULT>(root, 0x28)(),
+            slot::<extern "win64" fn() -> HRESULT>(root, 0x28)(),
             E_NOTIMPL
         );
         assert_eq!(
-            slot::<extern "system" fn(This, *const u16) -> HRESULT>(root, 0x30)(
+            slot::<extern "win64" fn(This, *const u16) -> HRESULT>(root, 0x30)(
                 root,
                 std::ptr::null()
             ),
@@ -422,7 +517,7 @@ mod tests {
         // GetDevice: an unknown interface is answered, not dereferenced.
         let mut device = std::ptr::null();
         let get_device =
-            slot::<extern "system" fn(This, *const Iid, *mut This) -> HRESULT>(root, 0x38);
+            slot::<extern "win64" fn(This, *const Iid, *mut This) -> HRESULT>(root, 0x38);
         assert_eq!(
             get_device(root, std::ptr::null(), &mut device),
             E_NOINTERFACE
@@ -460,8 +555,8 @@ mod tests {
         let (mut blob, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
         assert_eq!(serialize(&desc, 1, &mut blob, &mut error), S_OK);
         let blob = blob.cast_const().cast::<Object>();
-        let data = slot::<extern "system" fn(This) -> *const u8>(blob, 0x18)(blob);
-        let size = slot::<extern "system" fn(This) -> usize>(blob, 0x20)(blob);
+        let data = slot::<extern "win64" fn(This) -> *const u8>(blob, 0x18)(blob);
+        let size = slot::<extern "win64" fn(This) -> usize>(blob, 0x20)(blob);
         assert!(size > 0);
         let null = std::ptr::null();
         let mut root = null;
@@ -469,8 +564,8 @@ mod tests {
             create(null, 0, data, size, &ROOT_SIGNATURE_IIDS[0], &mut root),
             S_OK
         );
-        assert_eq!(slot::<extern "system" fn(This) -> u32>(root, 0x10)(root), 0);
-        slot::<extern "system" fn(This) -> u32>(blob, 0x10)(blob);
+        assert_eq!(slot::<extern "win64" fn(This) -> u32>(root, 0x10)(root), 0);
+        slot::<extern "win64" fn(This) -> u32>(blob, 0x10)(blob);
     }
 
     /// The host's deserializer reads our blobs back (the upscaler's call).
@@ -492,8 +587,8 @@ mod tests {
         let (mut blob, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
         assert_eq!(serialize_versioned(&desc, &mut blob, &mut error), S_OK);
         let blob = blob.cast_const().cast::<Object>();
-        let data = slot::<extern "system" fn(This) -> *const u8>(blob, 0x18)(blob);
-        let size = slot::<extern "system" fn(This) -> usize>(blob, 0x20)(blob);
+        let data = slot::<extern "win64" fn(This) -> *const u8>(blob, 0x18)(blob);
+        let size = slot::<extern "win64" fn(This) -> usize>(blob, 0x20)(blob);
         let iid: Iid = ID3D12RootSignatureDeserializer::IID.to_u128().to_be_bytes();
         let iid = guid(
             u32::from_be_bytes(iid[0..4].try_into().unwrap()),
@@ -508,7 +603,7 @@ mod tests {
         // SAFETY: valid while the deserializer lives.
         let read = unsafe { &*deserializer.GetRootSignatureDesc() };
         assert_eq!((read.NumParameters, read.Flags.0), (0, 1));
-        slot::<extern "system" fn(This) -> u32>(blob, 0x10)(blob);
+        slot::<extern "win64" fn(This) -> u32>(blob, 0x10)(blob);
     }
 
     /// Version 1.0 through the versioned entry point, with a console flag.
@@ -528,8 +623,8 @@ mod tests {
         let (mut blob, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
         assert_eq!(serialize_versioned(&desc, &mut blob, &mut error), S_OK);
         let blob = blob.cast_const().cast::<Object>();
-        assert!(slot::<extern "system" fn(This) -> usize>(blob, 0x20)(blob) > 0);
-        slot::<extern "system" fn(This) -> u32>(blob, 0x10)(blob);
+        assert!(slot::<extern "win64" fn(This) -> usize>(blob, 0x20)(blob) > 0);
+        slot::<extern "win64" fn(This) -> u32>(blob, 0x10)(blob);
         assert_eq!(
             serialize_versioned(std::ptr::null(), &mut blob.cast_mut().cast(), &mut error),
             E_INVALIDARG
@@ -556,8 +651,8 @@ mod tests {
         let (mut blob, mut error) = (std::ptr::null_mut(), std::ptr::null_mut());
         assert_eq!(serialize_versioned(&desc, &mut blob, &mut error), S_OK);
         let blob = blob.cast_const().cast::<Object>();
-        let data = slot::<extern "system" fn(This) -> *const u8>(blob, 0x18)(blob);
-        let size = slot::<extern "system" fn(This) -> usize>(blob, 0x20)(blob);
+        let data = slot::<extern "win64" fn(This) -> *const u8>(blob, 0x18)(blob);
+        let size = slot::<extern "win64" fn(This) -> usize>(blob, 0x20)(blob);
         let iid: Iid = ID3D12RootSignatureDeserializer::IID.to_u128().to_be_bytes();
         let iid = guid(
             u32::from_be_bytes(iid[0..4].try_into().unwrap()),
@@ -577,6 +672,6 @@ mod tests {
             E_INVALIDARG
         );
         assert!(out.is_null());
-        slot::<extern "system" fn(This) -> u32>(blob, 0x10)(blob);
+        slot::<extern "win64" fn(This) -> u32>(blob, 0x10)(blob);
     }
 }

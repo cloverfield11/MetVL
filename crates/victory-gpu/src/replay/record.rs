@@ -776,9 +776,9 @@ struct Notice {
 
 #[repr(C)]
 struct NoticeTable {
-    query: unsafe extern "system" fn(Ptr, *const GUID, Out) -> HRESULT,
-    add: unsafe extern "system" fn(Ptr) -> u32,
-    release: unsafe extern "system" fn(Ptr) -> u32,
+    query: unsafe extern "win64" fn(Ptr, *const GUID, Out) -> HRESULT,
+    add: unsafe extern "win64" fn(Ptr) -> u32,
+    release: unsafe extern "win64" fn(Ptr) -> u32,
 }
 static NOTICE: NoticeTable = NoticeTable {
     query: notice_query,
@@ -786,7 +786,7 @@ static NOTICE: NoticeTable = NoticeTable {
     release: notice_release,
 };
 
-unsafe extern "system" fn notice_query(this: Ptr, iid: *const GUID, out: Out) -> HRESULT {
+unsafe extern "win64" fn notice_query(this: Ptr, iid: *const GUID, out: Out) -> HRESULT {
     // SAFETY: COM's rules: a valid id and place for the answer.
     unsafe {
         if *iid == IUnknown::IID {
@@ -799,7 +799,7 @@ unsafe extern "system" fn notice_query(this: Ptr, iid: *const GUID, out: Out) ->
     HRESULT(0x8000_4002_u32 as i32)
 }
 
-unsafe extern "system" fn notice_add(this: Ptr) -> u32 {
+unsafe extern "win64" fn notice_add(this: Ptr) -> u32 {
     // SAFETY: one of ours, alive while a reference is.
     unsafe {
         (*this.cast::<Notice>())
@@ -809,7 +809,7 @@ unsafe extern "system" fn notice_add(this: Ptr) -> u32 {
     }
 }
 
-unsafe extern "system" fn notice_release(this: Ptr) -> u32 {
+unsafe extern "win64" fn notice_release(this: Ptr) -> u32 {
     // SAFETY: as above; the last reference frees the box it was made as.
     unsafe {
         let left = (*this.cast::<Notice>())
@@ -1254,7 +1254,7 @@ fn made(hr: HRESULT, out: Out) -> Option<(&'static Recorder, Ptr)> {
     Some((recorder()?, p))
 }
 
-unsafe extern "system" fn create_queue(
+unsafe extern "win64" fn create_queue(
     this: Ptr,
     desc: *const D3D12_COMMAND_QUEUE_DESC,
     iid: *const GUID,
@@ -1274,7 +1274,7 @@ unsafe extern "system" fn create_queue(
     }
 }
 
-unsafe extern "system" fn create_list(
+unsafe extern "win64" fn create_list(
     this: Ptr,
     nodes: u32,
     kind: D3D12_COMMAND_LIST_TYPE,
@@ -1346,7 +1346,7 @@ fn begin(inner: &mut ListInner, r: &Recorder, pso: Ptr) {
     }
 }
 
-unsafe extern "system" fn create_library(
+unsafe extern "win64" fn create_library(
     this: Ptr,
     blob: *const c_void,
     size: usize,
@@ -1368,7 +1368,7 @@ unsafe extern "system" fn create_library(
     }
 }
 
-unsafe extern "system" fn create_graphics(
+unsafe extern "win64" fn create_graphics(
     this: Ptr,
     desc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     iid: *const GUID,
@@ -1384,7 +1384,7 @@ unsafe extern "system" fn create_graphics(
     }
 }
 
-unsafe extern "system" fn create_compute(
+unsafe extern "win64" fn create_compute(
     this: Ptr,
     desc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC,
     iid: *const GUID,
@@ -1400,7 +1400,7 @@ unsafe extern "system" fn create_compute(
     }
 }
 
-unsafe extern "system" fn create_stream(
+unsafe extern "win64" fn create_stream(
     this: Ptr,
     desc: *const D3D12_PIPELINE_STATE_STREAM_DESC,
     iid: *const GUID,
@@ -1416,7 +1416,7 @@ unsafe extern "system" fn create_stream(
     }
 }
 
-unsafe extern "system" fn load_graphics(
+unsafe extern "win64" fn load_graphics(
     this: Ptr,
     name: PCWSTR,
     desc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
@@ -1434,7 +1434,7 @@ unsafe extern "system" fn load_graphics(
     }
 }
 
-unsafe extern "system" fn load_compute(
+unsafe extern "win64" fn load_compute(
     this: Ptr,
     name: PCWSTR,
     desc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC,
@@ -1452,7 +1452,7 @@ unsafe extern "system" fn load_compute(
     }
 }
 
-unsafe extern "system" fn load_stream(
+unsafe extern "win64" fn load_stream(
     this: Ptr,
     name: PCWSTR,
     desc: *const D3D12_PIPELINE_STATE_STREAM_DESC,
@@ -1469,7 +1469,7 @@ unsafe extern "system" fn load_stream(
     }
 }
 
-unsafe extern "system" fn create_root(
+unsafe extern "win64" fn create_root(
     this: Ptr,
     nodes: u32,
     blob: *const c_void,
@@ -1496,7 +1496,7 @@ unsafe extern "system" fn create_root(
     }
 }
 
-unsafe extern "system" fn create_signature(
+unsafe extern "win64" fn create_signature(
     this: Ptr,
     desc: *const D3D12_COMMAND_SIGNATURE_DESC,
     root: Ptr,
@@ -1549,7 +1549,7 @@ unsafe extern "system" fn create_signature(
     }
 }
 
-unsafe extern "system" fn create_queries(
+unsafe extern "win64" fn create_queries(
     this: Ptr,
     desc: *const D3D12_QUERY_HEAP_DESC,
     iid: *const GUID,
@@ -1574,7 +1574,7 @@ unsafe extern "system" fn create_queries(
     }
 }
 
-unsafe extern "system" fn create_descriptors(
+unsafe extern "win64" fn create_descriptors(
     this: Ptr,
     desc: *const D3D12_DESCRIPTOR_HEAP_DESC,
     iid: *const GUID,
@@ -1610,7 +1610,7 @@ unsafe extern "system" fn create_descriptors(
     }
 }
 
-unsafe extern "system" fn create_heap(
+unsafe extern "win64" fn create_heap(
     this: Ptr,
     desc: *const D3D12_HEAP_DESC,
     iid: *const GUID,
@@ -1645,7 +1645,7 @@ unsafe fn clear_of(clear: *const D3D12_CLEAR_VALUE) -> Option<[u32; 5]> {
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn create_committed(
+unsafe extern "win64" fn create_committed(
     this: Ptr,
     props: *const D3D12_HEAP_PROPERTIES,
     flags: D3D12_HEAP_FLAGS,
@@ -1672,7 +1672,7 @@ unsafe extern "system" fn create_committed(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn create_placed(
+unsafe extern "win64" fn create_placed(
     this: Ptr,
     heap: Ptr,
     offset: u64,
@@ -1703,7 +1703,7 @@ unsafe extern "system" fn create_placed(
     }
 }
 
-unsafe extern "system" fn create_cbv(
+unsafe extern "win64" fn create_cbv(
     this: Ptr,
     desc: *const D3D12_CONSTANT_BUFFER_VIEW_DESC,
     at: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -1726,7 +1726,7 @@ unsafe extern "system" fn create_cbv(
     }
 }
 
-unsafe extern "system" fn create_srv(
+unsafe extern "win64" fn create_srv(
     this: Ptr,
     res: Ptr,
     desc: *const D3D12_SHADER_RESOURCE_VIEW_DESC,
@@ -1751,7 +1751,7 @@ unsafe extern "system" fn create_srv(
     }
 }
 
-unsafe extern "system" fn create_uav(
+unsafe extern "win64" fn create_uav(
     this: Ptr,
     res: Ptr,
     counter: Ptr,
@@ -1777,7 +1777,7 @@ unsafe extern "system" fn create_uav(
     }
 }
 
-unsafe extern "system" fn create_rtv(
+unsafe extern "win64" fn create_rtv(
     this: Ptr,
     res: Ptr,
     desc: *const D3D12_RENDER_TARGET_VIEW_DESC,
@@ -1802,7 +1802,7 @@ unsafe extern "system" fn create_rtv(
     }
 }
 
-unsafe extern "system" fn create_dsv(
+unsafe extern "win64" fn create_dsv(
     this: Ptr,
     res: Ptr,
     desc: *const D3D12_DEPTH_STENCIL_VIEW_DESC,
@@ -1827,7 +1827,7 @@ unsafe extern "system" fn create_dsv(
     }
 }
 
-unsafe extern "system" fn create_sampler(
+unsafe extern "win64" fn create_sampler(
     this: Ptr,
     desc: *const D3D12_SAMPLER_DESC,
     at: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -1845,7 +1845,7 @@ unsafe extern "system" fn create_sampler(
     }
 }
 
-unsafe extern "system" fn copy_descriptors_simple(
+unsafe extern "win64" fn copy_descriptors_simple(
     this: Ptr,
     n: u32,
     to: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -1862,7 +1862,7 @@ unsafe extern "system" fn copy_descriptors_simple(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn copy_descriptors(
+unsafe extern "win64" fn copy_descriptors(
     this: Ptr,
     n_to: u32,
     to: *const D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -1910,7 +1910,7 @@ unsafe extern "system" fn copy_descriptors(
     }
 }
 
-unsafe extern "system" fn execute(this: Ptr, n: u32, lists: *const Ptr) {
+unsafe extern "win64" fn execute(this: Ptr, n: u32, lists: *const Ptr) {
     // SAFETY: `n` closed lists, as D3D12 asks; the state is the queue's.
     unsafe {
         let go = || own!(this, ID3D12CommandQueue_Vtbl.ExecuteCommandLists)(this, n, lists);
@@ -1947,7 +1947,7 @@ unsafe fn note(this: Ptr, cmd: impl FnOnce(&Recorder) -> Cmd) {
     }
 }
 
-unsafe extern "system" fn list_close(this: Ptr) -> HRESULT {
+unsafe extern "win64" fn list_close(this: Ptr) -> HRESULT {
     // SAFETY: as above.
     unsafe {
         let hr = own!(this, ID3D12GraphicsCommandList_Vtbl.Close)(this);
@@ -1961,7 +1961,7 @@ unsafe extern "system" fn list_close(this: Ptr) -> HRESULT {
     }
 }
 
-unsafe extern "system" fn list_reset(this: Ptr, allocator: Ptr, pso: Ptr) -> HRESULT {
+unsafe extern "win64" fn list_reset(this: Ptr, allocator: Ptr, pso: Ptr) -> HRESULT {
     // SAFETY: as above.
     unsafe {
         let table = hook::table(this);
@@ -1981,7 +1981,7 @@ unsafe extern "system" fn list_reset(this: Ptr, allocator: Ptr, pso: Ptr) -> HRE
     }
 }
 
-unsafe extern "system" fn draw(
+unsafe extern "win64" fn draw(
     this: Ptr,
     vertices: u32,
     instances: u32,
@@ -2006,7 +2006,7 @@ unsafe extern "system" fn draw(
     }
 }
 
-unsafe extern "system" fn draw_indexed(
+unsafe extern "win64" fn draw_indexed(
     this: Ptr,
     indices: u32,
     instances: u32,
@@ -2034,7 +2034,7 @@ unsafe extern "system" fn draw_indexed(
     }
 }
 
-unsafe extern "system" fn dispatch(this: Ptr, x: u32, y: u32, z: u32) {
+unsafe extern "win64" fn dispatch(this: Ptr, x: u32, y: u32, z: u32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.Dispatch)(this, x, y, z);
@@ -2042,7 +2042,7 @@ unsafe extern "system" fn dispatch(this: Ptr, x: u32, y: u32, z: u32) {
     }
 }
 
-unsafe extern "system" fn dispatch_mesh(this: Ptr, x: u32, y: u32, z: u32) {
+unsafe extern "win64" fn dispatch_mesh(this: Ptr, x: u32, y: u32, z: u32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList6_Vtbl.DispatchMesh)(this, x, y, z);
@@ -2050,7 +2050,7 @@ unsafe extern "system" fn dispatch_mesh(this: Ptr, x: u32, y: u32, z: u32) {
     }
 }
 
-unsafe extern "system" fn copy_buffer(
+unsafe extern "win64" fn copy_buffer(
     this: Ptr,
     dst: Ptr,
     dst_at: u64,
@@ -2108,7 +2108,7 @@ unsafe fn note_change(this: Ptr, cmd: impl FnOnce(&Recorder) -> Cmd) {
     }
 }
 
-unsafe extern "system" fn copy_texture(
+unsafe extern "win64" fn copy_texture(
     this: Ptr,
     dst: *const D3D12_TEXTURE_COPY_LOCATION,
     x: u32,
@@ -2131,7 +2131,7 @@ unsafe extern "system" fn copy_texture(
     }
 }
 
-unsafe extern "system" fn copy_resource(this: Ptr, dst: Ptr, src: Ptr) {
+unsafe extern "win64" fn copy_resource(this: Ptr, dst: Ptr, src: Ptr) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.CopyResource)(this, dst, src);
@@ -2142,7 +2142,7 @@ unsafe extern "system" fn copy_resource(this: Ptr, dst: Ptr, src: Ptr) {
     }
 }
 
-unsafe extern "system" fn resolve(
+unsafe extern "win64" fn resolve(
     this: Ptr,
     dst: Ptr,
     dst_sub: u32,
@@ -2166,7 +2166,7 @@ unsafe extern "system" fn resolve(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn resolve_region(
+unsafe extern "win64" fn resolve_region(
     this: Ptr,
     dst: Ptr,
     dst_sub: u32,
@@ -2212,7 +2212,7 @@ unsafe fn rects(n: u32, all: *const RECT) -> Vec<[i32; 4]> {
         .collect()
 }
 
-unsafe extern "system" fn topology(this: Ptr, kind: D3D_PRIMITIVE_TOPOLOGY) {
+unsafe extern "win64" fn topology(this: Ptr, kind: D3D_PRIMITIVE_TOPOLOGY) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.IASetPrimitiveTopology)(this, kind);
@@ -2220,7 +2220,7 @@ unsafe extern "system" fn topology(this: Ptr, kind: D3D_PRIMITIVE_TOPOLOGY) {
     }
 }
 
-unsafe extern "system" fn viewports(this: Ptr, n: u32, all: *const D3D12_VIEWPORT) {
+unsafe extern "win64" fn viewports(this: Ptr, n: u32, all: *const D3D12_VIEWPORT) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.RSSetViewports)(this, n, all);
@@ -2232,7 +2232,7 @@ unsafe extern "system" fn viewports(this: Ptr, n: u32, all: *const D3D12_VIEWPOR
     }
 }
 
-unsafe extern "system" fn scissors(this: Ptr, n: u32, all: *const RECT) {
+unsafe extern "win64" fn scissors(this: Ptr, n: u32, all: *const RECT) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.RSSetScissorRects)(this, n, all);
@@ -2240,7 +2240,7 @@ unsafe extern "system" fn scissors(this: Ptr, n: u32, all: *const RECT) {
     }
 }
 
-unsafe extern "system" fn blend_factor(this: Ptr, factor: *const f32) {
+unsafe extern "win64" fn blend_factor(this: Ptr, factor: *const f32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.OMSetBlendFactor)(this, factor);
@@ -2250,7 +2250,7 @@ unsafe extern "system" fn blend_factor(this: Ptr, factor: *const f32) {
     }
 }
 
-unsafe extern "system" fn stencil_ref(this: Ptr, value: u32) {
+unsafe extern "win64" fn stencil_ref(this: Ptr, value: u32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.OMSetStencilRef)(this, value);
@@ -2258,7 +2258,7 @@ unsafe extern "system" fn stencil_ref(this: Ptr, value: u32) {
     }
 }
 
-unsafe extern "system" fn depth_bounds(this: Ptr, min: f32, max: f32) {
+unsafe extern "win64" fn depth_bounds(this: Ptr, min: f32, max: f32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList1_Vtbl.OMSetDepthBounds)(this, min, max);
@@ -2266,7 +2266,7 @@ unsafe extern "system" fn depth_bounds(this: Ptr, min: f32, max: f32) {
     }
 }
 
-unsafe extern "system" fn set_pipeline(this: Ptr, pso: Ptr) {
+unsafe extern "win64" fn set_pipeline(this: Ptr, pso: Ptr) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.SetPipelineState)(this, pso);
@@ -2276,7 +2276,7 @@ unsafe extern "system" fn set_pipeline(this: Ptr, pso: Ptr) {
     }
 }
 
-unsafe extern "system" fn barrier(this: Ptr, n: u32, all: *const D3D12_RESOURCE_BARRIER) {
+unsafe extern "win64" fn barrier(this: Ptr, n: u32, all: *const D3D12_RESOURCE_BARRIER) {
     // SAFETY: as above; a barrier's type says which of its parts holds.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.ResourceBarrier)(this, n, all);
@@ -2317,7 +2317,7 @@ unsafe extern "system" fn barrier(this: Ptr, n: u32, all: *const D3D12_RESOURCE_
     }
 }
 
-unsafe extern "system" fn set_heaps(this: Ptr, n: u32, all: *const Ptr) {
+unsafe extern "win64" fn set_heaps(this: Ptr, n: u32, all: *const Ptr) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.SetDescriptorHeaps)(this, n, all);
@@ -2329,7 +2329,7 @@ unsafe extern "system" fn set_heaps(this: Ptr, n: u32, all: *const Ptr) {
     }
 }
 
-unsafe extern "system" fn root_compute(this: Ptr, root: Ptr) {
+unsafe extern "win64" fn root_compute(this: Ptr, root: Ptr) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.SetComputeRootSignature)(this, root);
@@ -2340,7 +2340,7 @@ unsafe extern "system" fn root_compute(this: Ptr, root: Ptr) {
     }
 }
 
-unsafe extern "system" fn root_graphics(this: Ptr, root: Ptr) {
+unsafe extern "win64" fn root_graphics(this: Ptr, root: Ptr) {
     // SAFETY: as above.
     unsafe {
         own!(
@@ -2370,7 +2370,7 @@ fn table(r: &Recorder, graphics: bool, param: u32, at: u64) -> Cmd {
     }
 }
 
-unsafe extern "system" fn table_compute(this: Ptr, param: u32, at: D3D12_GPU_DESCRIPTOR_HANDLE) {
+unsafe extern "win64" fn table_compute(this: Ptr, param: u32, at: D3D12_GPU_DESCRIPTOR_HANDLE) {
     // SAFETY: as above.
     unsafe {
         own!(
@@ -2381,7 +2381,7 @@ unsafe extern "system" fn table_compute(this: Ptr, param: u32, at: D3D12_GPU_DES
     }
 }
 
-unsafe extern "system" fn table_graphics(this: Ptr, param: u32, at: D3D12_GPU_DESCRIPTOR_HANDLE) {
+unsafe extern "win64" fn table_graphics(this: Ptr, param: u32, at: D3D12_GPU_DESCRIPTOR_HANDLE) {
     // SAFETY: as above.
     unsafe {
         own!(
@@ -2392,7 +2392,7 @@ unsafe extern "system" fn table_graphics(this: Ptr, param: u32, at: D3D12_GPU_DE
     }
 }
 
-unsafe extern "system" fn constant_compute(this: Ptr, param: u32, value: u32, offset: u32) {
+unsafe extern "win64" fn constant_compute(this: Ptr, param: u32, value: u32, offset: u32) {
     // SAFETY: as above.
     unsafe {
         own!(
@@ -2408,7 +2408,7 @@ unsafe extern "system" fn constant_compute(this: Ptr, param: u32, value: u32, of
     }
 }
 
-unsafe extern "system" fn constant_graphics(this: Ptr, param: u32, value: u32, offset: u32) {
+unsafe extern "win64" fn constant_graphics(this: Ptr, param: u32, value: u32, offset: u32) {
     // SAFETY: as above.
     unsafe {
         own!(
@@ -2431,7 +2431,7 @@ unsafe fn values(n: u32, data: *const c_void) -> Vec<u32> {
         .collect()
 }
 
-unsafe extern "system" fn constants_compute(
+unsafe extern "win64" fn constants_compute(
     this: Ptr,
     param: u32,
     n: u32,
@@ -2453,7 +2453,7 @@ unsafe extern "system" fn constants_compute(
     }
 }
 
-unsafe extern "system" fn constants_graphics(
+unsafe extern "win64" fn constants_graphics(
     this: Ptr,
     param: u32,
     n: u32,
@@ -2486,7 +2486,7 @@ fn address(r: &Recorder, at: u64) -> Va {
 
 macro_rules! root_views {
     ($($name:ident, $method:ident, $graphics:literal, $kind:ident;)*) => {$(
-        unsafe extern "system" fn $name(this: Ptr, param: u32, at: u64) {
+        unsafe extern "win64" fn $name(this: Ptr, param: u32, at: u64) {
             // SAFETY: as above.
             unsafe {
                 own!(this, ID3D12GraphicsCommandList_Vtbl.$method)(this, param, at);
@@ -2504,7 +2504,7 @@ root_views! {
     uav_graphics, SetGraphicsRootUnorderedAccessView, true, UAV;
 }
 
-unsafe extern "system" fn index_buffer(this: Ptr, view: *const D3D12_INDEX_BUFFER_VIEW) {
+unsafe extern "win64" fn index_buffer(this: Ptr, view: *const D3D12_INDEX_BUFFER_VIEW) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.IASetIndexBuffer)(this, view);
@@ -2516,7 +2516,7 @@ unsafe extern "system" fn index_buffer(this: Ptr, view: *const D3D12_INDEX_BUFFE
     }
 }
 
-unsafe extern "system" fn vertex_buffers(
+unsafe extern "win64" fn vertex_buffers(
     this: Ptr,
     start: u32,
     n: u32,
@@ -2538,7 +2538,7 @@ unsafe extern "system" fn vertex_buffers(
     }
 }
 
-unsafe extern "system" fn targets(
+unsafe extern "win64" fn targets(
     this: Ptr,
     n: u32,
     colors: *const D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -2570,7 +2570,7 @@ unsafe extern "system" fn targets(
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn clear_depth(
+unsafe extern "win64" fn clear_depth(
     this: Ptr,
     view: D3D12_CPU_DESCRIPTOR_HANDLE,
     flags: D3D12_CLEAR_FLAGS,
@@ -2594,7 +2594,7 @@ unsafe extern "system" fn clear_depth(
     }
 }
 
-unsafe extern "system" fn clear_target(
+unsafe extern "win64" fn clear_target(
     this: Ptr,
     view: D3D12_CPU_DESCRIPTOR_HANDLE,
     color: *const f32,
@@ -2612,7 +2612,7 @@ unsafe extern "system" fn clear_target(
     }
 }
 
-unsafe extern "system" fn discard(this: Ptr, res: Ptr, region: *const D3D12_DISCARD_REGION) {
+unsafe extern "win64" fn discard(this: Ptr, res: Ptr, region: *const D3D12_DISCARD_REGION) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.DiscardResource)(this, res, region);
@@ -2628,7 +2628,7 @@ unsafe extern "system" fn discard(this: Ptr, res: Ptr, region: *const D3D12_DISC
     }
 }
 
-unsafe extern "system" fn begin_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TYPE, index: u32) {
+unsafe extern "win64" fn begin_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TYPE, index: u32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.BeginQuery)(this, heap, kind, index);
@@ -2640,7 +2640,7 @@ unsafe extern "system" fn begin_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TY
     }
 }
 
-unsafe extern "system" fn end_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TYPE, index: u32) {
+unsafe extern "win64" fn end_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TYPE, index: u32) {
     // SAFETY: as above.
     unsafe {
         own!(this, ID3D12GraphicsCommandList_Vtbl.EndQuery)(this, heap, kind, index);
@@ -2652,7 +2652,7 @@ unsafe extern "system" fn end_query(this: Ptr, heap: Ptr, kind: D3D12_QUERY_TYPE
     }
 }
 
-unsafe extern "system" fn resolve_query(
+unsafe extern "win64" fn resolve_query(
     this: Ptr,
     heap: Ptr,
     kind: D3D12_QUERY_TYPE,
@@ -2677,7 +2677,7 @@ unsafe extern "system" fn resolve_query(
     }
 }
 
-unsafe extern "system" fn indirect(
+unsafe extern "win64" fn indirect(
     this: Ptr,
     signature: Ptr,
     most: u32,
@@ -2702,7 +2702,7 @@ unsafe extern "system" fn indirect(
     }
 }
 
-unsafe extern "system" fn write_immediate(
+unsafe extern "win64" fn write_immediate(
     this: Ptr,
     n: u32,
     all: *const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER,

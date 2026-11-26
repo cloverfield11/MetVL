@@ -66,18 +66,14 @@ struct ImportSite {
     calls: AtomicU64,
 }
 
-extern "system" fn unimplemented_import(site: &'static ImportSite) -> u64 {
+extern "win64" fn unimplemented_import(site: &'static ImportSite) -> u64 {
+    eprintln!("runtime        unimplemented import called: {}!{}", site.dll, site.symbol);
     UNIMPLEMENTED_CALLS.fetch_add(1, Ordering::Relaxed);
-    let previous = site.calls.fetch_add(1, Ordering::Relaxed);
+    site.calls.fetch_add(1, Ordering::Relaxed);
     match site.policy {
-        UnimplementedPolicy::ReturnZero => {
-            if previous == 0 {
-                tracing::warn!(dll = %site.dll, symbol = %site.symbol, "unimplemented import called, returning 0");
-            }
-            0
-        }
+        UnimplementedPolicy::ReturnZero => 0,
         UnimplementedPolicy::Trap => {
-            tracing::error!(dll = %site.dll, symbol = %site.symbol, "unimplemented import called: trapped");
+            eprintln!("runtime        fatal: trapping on unimplemented import {}!{}", site.dll, site.symbol);
             std::process::abort();
         }
     }
@@ -122,7 +118,7 @@ impl ThunkBlock {
         code[0..2].copy_from_slice(&[0x48, 0xB9]); // mov rcx, imm64
         code[2..10].copy_from_slice(&(site as *const ImportSite as u64).to_le_bytes());
         code[10..12].copy_from_slice(&[0x48, 0xB8]); // mov rax, imm64
-        let handler = unimplemented_import as extern "system" fn(&'static ImportSite) -> u64;
+        let handler = unimplemented_import as extern "win64" fn(&'static ImportSite) -> u64;
         code[12..20].copy_from_slice(&(handler as *const () as u64).to_le_bytes());
         code[20..22].copy_from_slice(&[0xFF, 0xE0]); // jmp rax
 
@@ -285,6 +281,7 @@ pub fn load(prepared: &PreparedImage, _dir: &Path) -> Result<LoadedImage> {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         let _ = crate::rosetta::patch_image(base, &prepared.info);
+        let _ = crate::tls::redirect(base, &prepared.info);
     }
 
     // 5. Apply section protections (mprotect)
@@ -484,10 +481,12 @@ impl LoadedImage {
 
     unsafe fn tls_callbacks(&self, reason: u32, reserved: *mut c_void) {
         let Some(tls) = &self.info.tls else { return };
-        for &rva in &tls.callback_rvas {
-            type TlsCallback = unsafe extern "system" fn(*mut c_void, u32, *mut c_void);
+        for (i, &rva) in tls.callback_rvas.iter().enumerate() {
+            println!("runtime        running TLS callback {i} at {:#x}...", self.base() + rva as usize);
+            type TlsCallback = unsafe extern "win64" fn(*mut c_void, u32, *mut c_void);
             let callback: TlsCallback = unsafe { std::mem::transmute(self.base() + rva as usize) };
             unsafe { callback(self.base as *mut c_void, reason, reserved) };
+            println!("runtime        TLS callback {i} completed");
         }
     }
 
@@ -518,14 +517,23 @@ impl LoadedImage {
             .name("title-main".into())
             .stack_size(stack)
             .spawn(move || {
+                #[cfg(target_arch = "x86_64")]
+                unsafe {
+                    crate::tls::update_thread_teb();
+                }
                 for (name, dll) in &dlls {
+                    println!("runtime        attaching DLL {name}...");
                     unsafe { dll.attach() }.with_context(|| format!("attaching {name}"))?;
                 }
+                println!("runtime        running main image TLS callbacks...");
                 unsafe { self.run_tls_callbacks(DLL_PROCESS_ATTACH) };
-                type Entry = unsafe extern "system" fn(*mut c_void) -> u32;
+                println!("runtime        calling title entry point at {:#x}...", self.base + self.info.entry_rva as usize);
+                type Entry = unsafe extern "win64" fn(*mut c_void) -> u32;
                 let entry: Entry =
                     unsafe { std::mem::transmute(self.base + self.info.entry_rva as usize) };
-                Ok(unsafe { entry(std::ptr::null_mut()) })
+                let res = unsafe { entry(std::ptr::null_mut()) };
+                println!("runtime        title main exited with code {res}");
+                Ok(res)
             })
             .context("spawning title main thread")
     }

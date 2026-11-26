@@ -114,11 +114,11 @@ pub fn map_aliases(ranges: &[(u64, u64, u64)]) -> bool {
     ranges.iter().all(|&(to, from, len)| map_alias(to, from, len))
 }
 
-pub extern "system" fn XMemAlloc(size: usize, attributes: u64) -> *mut c_void {
+pub extern "win64" fn XMemAlloc(size: usize, attributes: u64) -> *mut c_void {
     XMemAllocDefault(size, attributes)
 }
 
-pub extern "system" fn XMemAllocDefault(size: usize, _attributes: u64) -> *mut c_void {
+pub extern "win64" fn XMemAllocDefault(size: usize, _attributes: u64) -> *mut c_void {
     let align = 64 * 1024;
     let alloc_size = (size + HEADER).next_multiple_of(align);
     let ptr = unsafe {
@@ -139,11 +139,11 @@ pub extern "system" fn XMemAllocDefault(size: usize, _attributes: u64) -> *mut c
     ptr
 }
 
-pub extern "system" fn XMemFree(address: *mut c_void, attributes: u64) {
+pub extern "win64" fn XMemFree(address: *mut c_void, attributes: u64) {
     XMemFreeDefault(address, attributes);
 }
 
-pub extern "system" fn XMemFreeDefault(address: *mut c_void, _attributes: u64) {
+pub extern "win64" fn XMemFreeDefault(address: *mut c_void, _attributes: u64) {
     if address.is_null() {
         return;
     }
@@ -153,11 +153,11 @@ pub extern "system" fn XMemFreeDefault(address: *mut c_void, _attributes: u64) {
     }
 }
 
-pub extern "system" fn XMemIsToolsMemAvailable() -> BOOL {
+pub extern "win64" fn XMemIsToolsMemAvailable() -> BOOL {
     0
 }
 
-pub extern "system" fn XMemAllocatePhysicalPages(
+pub extern "win64" fn XMemAllocatePhysicalPages(
     _flags: u64,
     count: *mut usize,
     pages: *mut usize,
@@ -195,7 +195,7 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     1
 }
 
-pub extern "system" fn XMemFreePhysicalPages(
+pub extern "win64" fn XMemFreePhysicalPages(
     _flags: u64,
     count: usize,
     pages: *const usize,
@@ -214,7 +214,7 @@ pub extern "system" fn XMemFreePhysicalPages(
     1
 }
 
-pub extern "system" fn XMemMapPhysicalPages(
+pub extern "win64" fn XMemMapPhysicalPages(
     address: *mut c_void,
     n: usize,
     pages: *const usize,
@@ -236,7 +236,7 @@ pub extern "system" fn XMemMapPhysicalPages(
     address
 }
 
-pub extern "system" fn XMemMapPhysicalPagesScatter(
+pub extern "win64" fn XMemMapPhysicalPagesScatter(
     addresses: *const *mut c_void,
     n: usize,
     pages: *const usize,
@@ -257,7 +257,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
     1
 }
 
-pub extern "system" fn XMemVirtualAlloc(
+pub extern "win64" fn XMemVirtualAlloc(
     base: *mut c_void,
     size: usize,
     _kind: u32,
@@ -283,7 +283,7 @@ pub extern "system" fn XMemVirtualAlloc(
     }
 }
 
-pub extern "system" fn XMemVirtualQuery(
+pub extern "win64" fn XMemVirtualQuery(
     _process: *mut c_void,
     address: *const c_void,
     out: *mut BasicInformation,
@@ -303,7 +303,7 @@ pub extern "system" fn XMemVirtualQuery(
     1
 }
 
-pub extern "system" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut WorkingSet) -> BOOL {
+pub extern "win64" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut WorkingSet) -> BOOL {
     if out.is_null() {
         return 0;
     }
@@ -320,7 +320,7 @@ pub extern "system" fn XMemGetWorkingSetStatistics(_which: u32, out: *mut Workin
     1
 }
 
-pub extern "system" fn XMemTransferMemory(_kind: u32, _size: usize) -> BOOL {
+pub extern "win64" fn XMemTransferMemory(_kind: u32, _size: usize) -> BOOL {
     1
 }
 

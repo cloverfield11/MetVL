@@ -198,6 +198,9 @@ pub fn run(
     }
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { Arc::new(image).spawn_main(dlls)? };
+    #[cfg(target_os = "macos")]
+    let code = victory_gpu::pump_cocoa_events_until(main)?;
+    #[cfg(not(target_os = "macos"))]
     let code = main
         .join()
         .map_err(|_| anyhow::anyhow!("title main thread panicked"))??;

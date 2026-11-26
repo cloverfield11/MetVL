@@ -19,6 +19,8 @@ pub mod dstorage;
 #[cfg(windows)]
 pub mod files;
 #[cfg(not(windows))]
+pub mod unix_crt;
+#[cfg(not(windows))]
 pub mod unix_files;
 #[cfg(not(windows))]
 pub use unix_files as files;
@@ -79,7 +81,8 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(net::module());
     all.push(rpcrt4::module());
     all.push(xmem::module());
-    #[cfg(windows)]
+    #[cfg(not(windows))]
+    all.push(unix_crt::module());
     all.push(xsystem::module());
     all
 }

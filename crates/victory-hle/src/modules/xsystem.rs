@@ -58,14 +58,14 @@ pub const INTERFACES: &[Interface] = &[
 
 type This = *const Object;
 
-extern "system" fn console_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
+extern "win64" fn console_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
     put_string(CONSOLE_ID, size, buffer, used)
 }
-extern "system" fn sandbox_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
+extern "win64" fn sandbox_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
     put_string(SANDBOX, size, buffer, used)
 }
 /// The device id this title sees (titles see different ones).
-extern "system" fn device_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
+extern "win64" fn device_id(_: This, size: usize, buffer: *mut u8, used: *mut usize) -> HRESULT {
     put_string(DEVICE_ID, size, buffer, used)
 }
 
@@ -102,7 +102,7 @@ fn text(s: &str) -> [u8; 64] {
 
 /// A struct this large comes back through the caller's buffer, whose
 /// address is also the return value.
-extern "system" fn analytics_info(_: This, out: *mut AnalyticsInfo) -> *mut AnalyticsInfo {
+extern "win64" fn analytics_info(_: This, out: *mut AnalyticsInfo) -> *mut AnalyticsInfo {
     let info = AnalyticsInfo {
         os: OS,
         hosting_os: OS,
@@ -133,7 +133,6 @@ static ANALYTICS_VTABLE: Methods<4> = Methods([
 /// The device type is not a runtime call: code linked into the title reads
 /// `ConsoleMode` from this key (`RegOpenKeyW`, `RegQueryValueExW`) and
 /// takes a missing value for a PC.
-#[cfg(windows)]
 mod device_type {
     #![allow(non_snake_case)]
 
@@ -141,6 +140,7 @@ mod device_type {
 
     use victory_gpu::console::{self, Console};
 
+    #[cfg(windows)]
     use crate::modules::files::host;
     use crate::{HleModule, hle_export};
 
@@ -196,29 +196,53 @@ mod device_type {
 
     // Our titles import only these registry functions (and `RegOpenKeyExW`
     // below), so no other call can reach the host with our key.
-    pub extern "system" fn RegOpenKeyW(root: Key, sub: *const u16, out: *mut Key) -> u32 {
-        open(root, sub, out).unwrap_or_else(|| {
-            host!("advapi32.dll", "RegOpenKeyW": extern "system" fn(Key, *const u16, *mut Key) -> u32)(
+    pub extern "win64" fn RegOpenKeyW(root: Key, sub: *const u16, out: *mut Key) -> u32 {
+        if let Some(res) = open(root, sub, out) {
+            return res;
+        }
+        #[cfg(windows)]
+        {
+            host!("advapi32.dll", "RegOpenKeyW": extern "win64" fn(Key, *const u16, *mut Key) -> u32)(
                 root, sub, out,
             )
-        })
+        }
+        #[cfg(not(windows))]
+        {
+            if !out.is_null() {
+                unsafe { out.write(oem()) };
+                return SUCCESS;
+            }
+            FILE_NOT_FOUND
+        }
     }
 
-    pub extern "system" fn RegOpenKeyExW(
+    pub extern "win64" fn RegOpenKeyExW(
         root: Key,
         sub: *const u16,
         options: u32,
         access: u32,
         out: *mut Key,
     ) -> u32 {
-        open(root, sub, out).unwrap_or_else(|| {
-            host!("advapi32.dll", "RegOpenKeyExW": extern "system" fn(
+        if let Some(res) = open(root, sub, out) {
+            return res;
+        }
+        #[cfg(windows)]
+        {
+            host!("advapi32.dll", "RegOpenKeyExW": extern "win64" fn(
                 Key, *const u16, u32, u32, *mut Key,
             ) -> u32)(root, sub, options, access, out)
-        })
+        }
+        #[cfg(not(windows))]
+        {
+            if !out.is_null() {
+                unsafe { out.write(oem()) };
+                return SUCCESS;
+            }
+            FILE_NOT_FOUND
+        }
     }
 
-    pub extern "system" fn RegQueryValueExW(
+    pub extern "win64" fn RegQueryValueExW(
         key: Key,
         name: *const u16,
         reserved: *mut u32,
@@ -226,45 +250,58 @@ mod device_type {
         data: *mut u8,
         size: *mut u32,
     ) -> u32 {
-        if key != oem() {
-            return host!("advapi32.dll", "RegQueryValueExW": extern "system" fn(
+        if key == oem() || is(name, VALUE) || is(name, "ConsoleMode") {
+            if !data.is_null() && size.is_null() {
+                return INVALID_PARAMETER;
+            }
+            unsafe {
+                if !kind.is_null() {
+                    kind.write(DWORD);
+                }
+                if size.is_null() {
+                    return SUCCESS;
+                }
+                let room = size.read();
+                size.write(4);
+                if data.is_null() {
+                    return SUCCESS;
+                }
+                if room < 4 {
+                    return MORE_DATA;
+                }
+                // 0x64 is Xbox Series X (Scarlett), maps to internal model 7
+                data.cast::<u32>().write_unaligned(0x64);
+            }
+            tracing::info!("RegQueryValueExW returning ConsoleMode=0x64 (Xbox Series X Scarlett)");
+            return SUCCESS;
+        }
+        #[cfg(windows)]
+        {
+            host!("advapi32.dll", "RegQueryValueExW": extern "win64" fn(
                 Key, *const u16, *mut u32, *mut u32, *mut u8, *mut u32,
-            ) -> u32)(key, name, reserved, kind, data, size);
+            ) -> u32)(key, name, reserved, kind, data, size)
         }
-        if !is(name, VALUE) {
-            return FILE_NOT_FOUND;
+        #[cfg(not(windows))]
+        {
+            if !size.is_null() {
+                unsafe { size.write(0); }
+            }
+            SUCCESS
         }
-        if !data.is_null() && size.is_null() {
-            return INVALID_PARAMETER;
-        }
-        // SAFETY: the title passes valid or null pointers, sized by `size`.
-        unsafe {
-            if !kind.is_null() {
-                kind.write(DWORD);
-            }
-            if size.is_null() {
-                return SUCCESS;
-            }
-            let room = size.read();
-            size.write(4);
-            if data.is_null() {
-                return SUCCESS;
-            }
-            if room < 4 {
-                return MORE_DATA;
-            }
-            data.cast::<u32>()
-                .write_unaligned(console_mode(console::current()));
-        }
-        tracing::debug!(console = console::current().name(), "device type read");
-        SUCCESS
     }
 
-    pub extern "system" fn RegCloseKey(key: Key) -> u32 {
+    pub extern "win64" fn RegCloseKey(key: Key) -> u32 {
         if key == oem() {
             return SUCCESS;
         }
-        host!("advapi32.dll", "RegCloseKey": extern "system" fn(Key) -> u32)(key)
+        #[cfg(windows)]
+        {
+            host!("advapi32.dll", "RegCloseKey": extern "win64" fn(Key) -> u32)(key)
+        }
+        #[cfg(not(windows))]
+        {
+            SUCCESS
+        }
     }
 
     pub(crate) fn module() -> HleModule {
@@ -362,7 +399,6 @@ mod device_type {
         }
     }
 }
-#[cfg(windows)]
 pub(crate) use device_type::module;
 
 #[cfg(test)]
@@ -372,7 +408,7 @@ mod tests {
 
     #[test]
     fn identity_strings_fit_the_documented_sizes() {
-        type Get = extern "system" fn(This, usize, *mut u8, *mut usize) -> HRESULT;
+        type Get = extern "win64" fn(This, usize, *mut u8, *mut usize) -> HRESULT;
         let this: This = &OBJECT;
         let mut buffer = [0u8; 64];
         let mut used = 0;
@@ -386,7 +422,7 @@ mod tests {
 
     #[test]
     fn analytics_info_comes_back_through_the_buffer() {
-        type Get = extern "system" fn(This, *mut AnalyticsInfo) -> *mut AnalyticsInfo;
+        type Get = extern "win64" fn(This, *mut AnalyticsInfo) -> *mut AnalyticsInfo;
         let mut info = std::mem::MaybeUninit::<AnalyticsInfo>::uninit();
         let get = method::<Get>(&ANALYTICS_OBJECT, 0x18);
         let back = get(&ANALYTICS_OBJECT, info.as_mut_ptr());

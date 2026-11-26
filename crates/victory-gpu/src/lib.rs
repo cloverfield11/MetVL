@@ -99,7 +99,7 @@ pub mod metal_backend;
 #[cfg(target_os = "macos")]
 pub mod metal_presenter;
 #[cfg(target_os = "macos")]
-pub use metal_presenter::{MetalPresenter, create_native_window};
+pub use metal_presenter::{MetalPresenter, create_native_window, pump_cocoa_events_until};
 #[cfg(target_os = "macos")]
 pub use metal_backend::{context, UnifiedBuffer};
 

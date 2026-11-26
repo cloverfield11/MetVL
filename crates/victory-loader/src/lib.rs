@@ -42,8 +42,8 @@ pub(crate) mod rosetta;
 mod threads;
 #[cfg(windows)]
 mod thunks;
-#[cfg(windows)]
-mod tls;
+#[cfg(any(windows, all(unix, target_arch = "x86_64")))]
+pub mod tls;
 #[cfg(windows)]
 pub mod write_sites;
 #[cfg(not(windows))]

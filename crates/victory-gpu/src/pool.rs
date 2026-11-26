@@ -424,7 +424,7 @@ unsafe impl Sync for Methods {}
 
 static RECLAIM: Methods = Methods([query as *const (), add_ref as *const (), release as *const ()]);
 
-unsafe extern "system" fn query(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+unsafe extern "win64" fn query(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
     const E_NOINTERFACE: HRESULT = HRESULT(0x8000_4002_u32 as i32);
     // SAFETY: COM's arguments.
     unsafe {
@@ -441,12 +441,12 @@ unsafe extern "system" fn query(this: *mut c_void, iid: *const GUID, out: *mut *
     E_NOINTERFACE
 }
 
-unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
+unsafe extern "win64" fn add_ref(this: *mut c_void) -> u32 {
     // SAFETY: one of ours, alive while a reference to it is.
     unsafe { (*this.cast::<Reclaim>()).references.fetch_add(1, Ordering::Relaxed) + 1 }
 }
 
-unsafe extern "system" fn release(this: *mut c_void) -> u32 {
+unsafe extern "win64" fn release(this: *mut c_void) -> u32 {
     // SAFETY: as above; the last reference frees the box it was made as.
     unsafe {
         let left = (*this.cast::<Reclaim>()).references.fetch_sub(1, Ordering::AcqRel) - 1;

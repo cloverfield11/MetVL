@@ -260,7 +260,7 @@ type File = *mut c_void;
 
 // kernel32 and its file API sets.
 
-pub extern "system" fn CreateFileW(
+pub extern "win64" fn CreateFileW(
     path: *const u16,
     access: u32,
     share: u32,
@@ -270,7 +270,7 @@ pub extern "system" fn CreateFileW(
     template: Handle,
 ) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "CreateFileW": extern "system" fn(*const u16, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
+    host!("kernel32.dll", "CreateFileW": extern "win64" fn(*const u16, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
         p.ptr(),
         access,
         share,
@@ -281,7 +281,7 @@ pub extern "system" fn CreateFileW(
     )
 }
 
-pub extern "system" fn CreateFileA(
+pub extern "win64" fn CreateFileA(
     path: *const c_char,
     access: u32,
     share: u32,
@@ -292,7 +292,7 @@ pub extern "system" fn CreateFileA(
 ) -> Handle {
     match narrow(path) {
         Some(p) => {
-            host!("kernel32.dll", "CreateFileW": extern "system" fn(*const u16, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
+            host!("kernel32.dll", "CreateFileW": extern "win64" fn(*const u16, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
                 p.as_ptr(),
                 access,
                 share,
@@ -303,7 +303,7 @@ pub extern "system" fn CreateFileA(
             )
         }
         None => {
-            host!("kernel32.dll", "CreateFileA": extern "system" fn(*const c_char, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
+            host!("kernel32.dll", "CreateFileA": extern "win64" fn(*const c_char, u32, u32, *const c_void, u32, u32, Handle) -> Handle)(
                 path,
                 access,
                 share,
@@ -317,7 +317,7 @@ pub extern "system" fn CreateFileA(
 }
 
 /// Used by Bink.
-pub extern "system" fn CreateFile2(
+pub extern "win64" fn CreateFile2(
     path: *const u16,
     access: u32,
     share: u32,
@@ -325,7 +325,7 @@ pub extern "system" fn CreateFile2(
     params: *const c_void,
 ) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "CreateFile2": extern "system" fn(*const u16, u32, u32, u32, *const c_void) -> Handle)(
+    host!("kernel32.dll", "CreateFile2": extern "win64" fn(*const u16, u32, u32, u32, *const c_void) -> Handle)(
         p.ptr(),
         access,
         share,
@@ -334,84 +334,84 @@ pub extern "system" fn CreateFile2(
     )
 }
 
-pub extern "system" fn DeleteFileA(path: *const c_char) -> i32 {
+pub extern "win64" fn DeleteFileA(path: *const c_char) -> i32 {
     match narrow(path) {
         Some(p) => {
-            host!("kernel32.dll", "DeleteFileW": extern "system" fn(*const u16) -> i32)(p.as_ptr())
+            host!("kernel32.dll", "DeleteFileW": extern "win64" fn(*const u16) -> i32)(p.as_ptr())
         }
         None => {
-            host!("kernel32.dll", "DeleteFileA": extern "system" fn(*const c_char) -> i32)(path)
+            host!("kernel32.dll", "DeleteFileA": extern "win64" fn(*const c_char) -> i32)(path)
         }
     }
 }
 
-pub extern "system" fn DeleteFileW(path: *const u16) -> i32 {
+pub extern "win64" fn DeleteFileW(path: *const u16) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "DeleteFileW": extern "system" fn(*const u16) -> i32)(p.ptr())
+    host!("kernel32.dll", "DeleteFileW": extern "win64" fn(*const u16) -> i32)(p.ptr())
 }
 
-pub extern "system" fn RemoveDirectoryW(path: *const u16) -> i32 {
+pub extern "win64" fn RemoveDirectoryW(path: *const u16) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "RemoveDirectoryW": extern "system" fn(*const u16) -> i32)(p.ptr())
+    host!("kernel32.dll", "RemoveDirectoryW": extern "win64" fn(*const u16) -> i32)(p.ptr())
 }
 
-pub extern "system" fn SetFileAttributesW(path: *const u16, attributes: u32) -> i32 {
+pub extern "win64" fn SetFileAttributesW(path: *const u16, attributes: u32) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "SetFileAttributesW": extern "system" fn(*const u16, u32) -> i32)(
+    host!("kernel32.dll", "SetFileAttributesW": extern "win64" fn(*const u16, u32) -> i32)(
         p.ptr(),
         attributes,
     )
 }
 
-pub extern "system" fn GetFileAttributesA(path: *const c_char) -> u32 {
+pub extern "win64" fn GetFileAttributesA(path: *const c_char) -> u32 {
     match narrow(path) {
         Some(p) => {
-            host!("kernel32.dll", "GetFileAttributesW": extern "system" fn(*const u16) -> u32)(
+            host!("kernel32.dll", "GetFileAttributesW": extern "win64" fn(*const u16) -> u32)(
                 p.as_ptr(),
             )
         }
         None => {
-            host!("kernel32.dll", "GetFileAttributesA": extern "system" fn(*const c_char) -> u32)(
+            host!("kernel32.dll", "GetFileAttributesA": extern "win64" fn(*const c_char) -> u32)(
                 path,
             )
         }
     }
 }
 
-pub extern "system" fn CreateDirectoryW(path: *const u16, security: *const c_void) -> i32 {
+pub extern "win64" fn CreateDirectoryW(path: *const u16, security: *const c_void) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "CreateDirectoryW": extern "system" fn(*const u16, *const c_void) -> i32)(
+    host!("kernel32.dll", "CreateDirectoryW": extern "win64" fn(*const u16, *const c_void) -> i32)(
         p.ptr(),
         security,
     )
 }
 
-pub extern "system" fn GetFileAttributesExW(
+pub extern "win64" fn GetFileAttributesExW(
     path: *const u16,
     level: i32,
     info: *mut c_void,
 ) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "GetFileAttributesExW": extern "system" fn(*const u16, i32, *mut c_void) -> i32)(
+    host!("kernel32.dll", "GetFileAttributesExW": extern "win64" fn(*const u16, i32, *mut c_void) -> i32)(
         p.ptr(),
         level,
         info,
     )
 }
 
-pub extern "system" fn GetFileAttributesW(path: *const u16) -> u32 {
+pub extern "win64" fn GetFileAttributesW(path: *const u16) -> u32 {
     let p = wide(path);
-    host!("kernel32.dll", "GetFileAttributesW": extern "system" fn(*const u16) -> u32)(p.ptr())
+    host!("kernel32.dll", "GetFileAttributesW": extern "win64" fn(*const u16) -> u32)(p.ptr())
 }
 
-pub extern "system" fn GetDiskFreeSpaceExW(
+pub extern "win64" fn GetDiskFreeSpaceExW(
     path: *const u16,
     available: *mut u64,
     total: *mut u64,
     free: *mut u64,
 ) -> i32 {
     let p = wide(path);
-    host!("kernel32.dll", "GetDiskFreeSpaceExW": extern "system" fn(*const u16, *mut u64, *mut u64, *mut u64) -> i32)(
+    host!("kernel32.dll", "GetDiskFreeSpaceExW": extern "win64" fn(*const u16, *mut u64, *mut u64, *mut u64) -> i32)(
         p.ptr(),
         available,
         total,
@@ -421,7 +421,7 @@ pub extern "system" fn GetDiskFreeSpaceExW(
 
 /// Wants a volume root: a virtual drive answers for the host volume its
 /// folder is on.
-pub extern "system" fn GetDiskFreeSpaceW(
+pub extern "win64" fn GetDiskFreeSpaceW(
     root: *const u16,
     sectors_per_cluster: *mut u32,
     bytes_per_sector: *mut u32,
@@ -436,7 +436,7 @@ pub extern "system" fn GetDiskFreeSpaceW(
     {
         *host = vec![letter, colon, sep, 0];
     }
-    host!("kernel32.dll", "GetDiskFreeSpaceW": extern "system" fn(*const u16, *mut u32, *mut u32, *mut u32, *mut u32) -> i32)(
+    host!("kernel32.dll", "GetDiskFreeSpaceW": extern "win64" fn(*const u16, *mut u32, *mut u32, *mut u32, *mut u32) -> i32)(
         p.ptr(),
         sectors_per_cluster,
         bytes_per_sector,
@@ -445,15 +445,15 @@ pub extern "system" fn GetDiskFreeSpaceW(
     )
 }
 
-pub extern "system" fn FindFirstFileW(path: *const u16, data: *mut c_void) -> Handle {
+pub extern "win64" fn FindFirstFileW(path: *const u16, data: *mut c_void) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "FindFirstFileW": extern "system" fn(*const u16, *mut c_void) -> Handle)(
+    host!("kernel32.dll", "FindFirstFileW": extern "win64" fn(*const u16, *mut c_void) -> Handle)(
         p.ptr(),
         data,
     )
 }
 
-pub extern "system" fn FindFirstFileExW(
+pub extern "win64" fn FindFirstFileExW(
     path: *const u16,
     level: i32,
     data: *mut c_void,
@@ -462,7 +462,7 @@ pub extern "system" fn FindFirstFileExW(
     flags: u32,
 ) -> Handle {
     let p = wide(path);
-    host!("kernel32.dll", "FindFirstFileExW": extern "system" fn(*const u16, i32, *mut c_void, i32, *mut c_void, u32) -> Handle)(
+    host!("kernel32.dll", "FindFirstFileExW": extern "win64" fn(*const u16, i32, *mut c_void, i32, *mut c_void, u32) -> Handle)(
         p.ptr(),
         level,
         data,
@@ -472,24 +472,24 @@ pub extern "system" fn FindFirstFileExW(
     )
 }
 
-pub extern "system" fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32 {
+pub extern "win64" fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32 {
     let (from, to) = (wide(from), wide(to));
-    host!("kernel32.dll", "MoveFileExW": extern "system" fn(*const u16, *const u16, u32) -> i32)(
+    host!("kernel32.dll", "MoveFileExW": extern "win64" fn(*const u16, *const u16, u32) -> i32)(
         from.ptr(),
         to.ptr(),
         flags,
     )
 }
 
-pub extern "system" fn SetCurrentDirectoryA(path: *const c_char) -> i32 {
+pub extern "win64" fn SetCurrentDirectoryA(path: *const c_char) -> i32 {
     match narrow(path) {
         Some(p) => {
-            host!("kernel32.dll", "SetCurrentDirectoryW": extern "system" fn(*const u16) -> i32)(
+            host!("kernel32.dll", "SetCurrentDirectoryW": extern "win64" fn(*const u16) -> i32)(
                 p.as_ptr(),
             )
         }
         None => {
-            host!("kernel32.dll", "SetCurrentDirectoryA": extern "system" fn(*const c_char) -> i32)(
+            host!("kernel32.dll", "SetCurrentDirectoryA": extern "win64" fn(*const c_char) -> i32)(
                 path,
             )
         }
@@ -528,7 +528,7 @@ pub extern "C" fn _wfsopen(path: *const u16, mode: *const u16, share: i32) -> Fi
 // destinations and retry a failed `ReadFile` forever. So the destination
 // is opened first, and not guarded again before the call is done.
 
-pub extern "system" fn ReadFile(
+pub extern "win64" fn ReadFile(
     file: *mut c_void,
     buffer: *mut u8,
     len: u32,
@@ -536,7 +536,7 @@ pub extern "system" fn ReadFile(
     overlapped: *mut c_void,
 ) -> i32 {
     let writing = victory_gpu::kernel_writing(buffer as usize, len as usize);
-    let done = host!("kernel32.dll", "ReadFile": extern "system" fn(*mut c_void, *mut u8, u32, *mut u32, *mut c_void) -> i32)(
+    let done = host!("kernel32.dll", "ReadFile": extern "win64" fn(*mut c_void, *mut u8, u32, *mut u32, *mut c_void) -> i32)(
         file, buffer, len, read, overlapped,
     );
     // The call's error is the title's to ask for.
@@ -906,7 +906,7 @@ mod tests {
         let letter = mount(dir.path()).unwrap();
         const GENERIC_WRITE: u32 = 0x4000_0000;
         const CREATE_ALWAYS: u32 = 2;
-        let close = host!("kernel32.dll", "CloseHandle": extern "system" fn(Handle) -> i32);
+        let close = host!("kernel32.dll", "CloseHandle": extern "win64" fn(Handle) -> i32);
         let fclose = host!("ucrtbase.dll", "fclose": extern "C" fn(File) -> i32);
 
         let path = w(&format!(r"{letter}:\created.bin"));

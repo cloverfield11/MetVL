@@ -1087,7 +1087,7 @@ fn placeholder(block: usize) -> bool {
         node_preference: usize,
     }
     #[link(name = "ntdll", kind = "raw-dylib")]
-    unsafe extern "system" {
+    unsafe extern "win64" {
         fn NtQueryVirtualMemory(
             process: *mut std::ffi::c_void,
             at: *const std::ffi::c_void,
@@ -2562,7 +2562,7 @@ pub(crate) fn install() {
         AddVectoredExceptionHandler, EXCEPTION_CONTINUE_EXECUTION, EXCEPTION_CONTINUE_SEARCH,
         EXCEPTION_POINTERS,
     };
-    unsafe extern "system" fn on_write(info: *mut EXCEPTION_POINTERS) -> i32 {
+    unsafe extern "win64" fn on_write(info: *mut EXCEPTION_POINTERS) -> i32 {
         let _fault = crate::timeline::span("a fault looked at");
         // SAFETY: the system passes the exception being dispatched.
         let r = unsafe { &*(*info).ExceptionRecord };

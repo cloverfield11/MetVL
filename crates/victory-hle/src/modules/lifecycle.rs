@@ -22,7 +22,7 @@ use crate::{HleModule, hle_export};
 
 /// A suspend routine (`quiesced`) or a constrained-change routine
 /// (`constrained`): both take a flag and the title's context.
-type Routine = extern "system" fn(flag: u8, context: *mut c_void);
+type Routine = extern "win64" fn(flag: u8, context: *mut c_void);
 
 /// Registration id, routine and context.
 type Registration = (usize, Routine, usize);
@@ -67,7 +67,7 @@ fn register(
     0
 }
 
-pub extern "system" fn RegisterAppStateChangeNotification(
+pub extern "win64" fn RegisterAppStateChangeNotification(
     routine: Option<Routine>,
     context: *mut c_void,
     registration: *mut usize,
@@ -75,13 +75,13 @@ pub extern "system" fn RegisterAppStateChangeNotification(
     register(routines(), routine, context, registration)
 }
 
-pub extern "system" fn UnregisterAppStateChangeNotification(registration: usize) {
+pub extern "win64" fn UnregisterAppStateChangeNotification(registration: usize) {
     routines().retain(|&(id, ..)| id != registration);
 }
 
 /// The host's own version never calls the routine (a desktop app is never
 /// constrained), so a title waiting for it would never suspend.
-pub extern "system" fn RegisterAppConstrainedChangeNotification(
+pub extern "win64" fn RegisterAppConstrainedChangeNotification(
     routine: Option<Routine>,
     context: *mut c_void,
     registration: *mut usize,
@@ -89,14 +89,14 @@ pub extern "system" fn RegisterAppConstrainedChangeNotification(
     register(constrained(), routine, context, registration)
 }
 
-pub extern "system" fn UnregisterAppConstrainedChangeNotification(registration: usize) {
+pub extern "win64" fn UnregisterAppConstrainedChangeNotification(registration: usize) {
     constrained().retain(|&(id, ..)| id != registration);
 }
 
 /// The window procedure a title window had before ours.
 const TITLE_PROC: PCWSTR = w!("victory.wndproc");
 
-pub extern "system" fn CreateWindowExW(
+pub extern "win64" fn CreateWindowExW(
     ex_style: u32,
     class: PCWSTR,
     name: PCWSTR,
@@ -122,7 +122,7 @@ pub extern "system" fn CreateWindowExW(
 }
 
 /// See [`CreateWindowExW`].
-pub extern "system" fn CreateWindowExA(
+pub extern "win64" fn CreateWindowExA(
     ex_style: u32,
     class: PCSTR,
     name: PCSTR,
@@ -240,7 +240,7 @@ fn hook(hwnd: HWND) {
     }
 }
 
-extern "system" fn window_proc(
+extern "win64" fn window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -406,7 +406,7 @@ pub(crate) fn module() -> HleModule {
 mod tests {
     use super::*;
 
-    extern "system" fn noop(_: u8, _: *mut c_void) {}
+    extern "win64" fn noop(_: u8, _: *mut c_void) {}
 
     #[test]
     fn registrations_come_and_go() {
@@ -447,7 +447,7 @@ mod tests {
     /// What `recording_routine` saw: (context, flag) per call, in order.
     static CALLS: Mutex<Vec<(usize, u8)>> = Mutex::new(Vec::new());
 
-    extern "system" fn recording_routine(flag: u8, context: *mut c_void) {
+    extern "win64" fn recording_routine(flag: u8, context: *mut c_void) {
         CALLS.lock().unwrap().push((context as usize, flag));
     }
 
@@ -567,7 +567,7 @@ mod tests {
 
     /// Stands in for a title's procedure: notes system commands and acts
     /// on none of them (no menu loop, no minimising).
-    extern "system" fn recording(
+    extern "win64" fn recording(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,

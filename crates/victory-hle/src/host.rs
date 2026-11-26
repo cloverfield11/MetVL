@@ -178,9 +178,9 @@ mod imp {
         /// thread starts.
         #[used]
         #[unsafe(link_section = ".CRT$XLY")]
-        static ON_THREAD: unsafe extern "system" fn(*mut c_void, u32, *mut c_void) = attach;
+        static ON_THREAD: unsafe extern "win64" fn(*mut c_void, u32, *mut c_void) = attach;
 
-        unsafe extern "system" fn attach(_: *mut c_void, reason: u32, _: *mut c_void) {
+        unsafe extern "win64" fn attach(_: *mut c_void, reason: u32, _: *mut c_void) {
             const DLL_THREAD_ATTACH: u32 = 2;
             if reason == DLL_THREAD_ATTACH && ARMED.swap(false, Ordering::SeqCst) {
                 IN_ATTACH.store(true, Ordering::SeqCst);
@@ -191,7 +191,7 @@ mod imp {
             }
         }
 
-        unsafe extern "system" fn idle(_: *mut c_void) -> u32 {
+        unsafe extern "win64" fn idle(_: *mut c_void) -> u32 {
             0
         }
 
