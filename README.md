@@ -142,14 +142,14 @@ cd MetVL
 # Build release binary for x86_64 macOS target
 cargo +stable build --release -p victory --target x86_64-apple-darwin
 
-# Copy binary into Americas.app bundle
-cp target/x86_64-apple-darwin/release/victory Americas.app/Contents/MacOS/victory
+# Copy binary into MetVL.app bundle
+cp target/x86_64-apple-darwin/release/victory MetVL.app/Contents/MacOS/victory
 ```
 
 ### Running GTA VI
-Pass the directory containing your legally dumped Scarlett build (`game_scarlett_master.exe`):
+You can launch directly by double-clicking **`MetVL.app`** in Finder, or via terminal:
 ```bash
-VICTORY_SKIP_CPU_CHECK=1 ./Americas.app/Contents/MacOS/victory run \
+VICTORY_SKIP_CPU_CHECK=1 ./MetVL.app/Contents/MacOS/victory run \
   /path/to/scarlet-americas/game_scarlett_master.exe \
   --unimplemented zero \
   --execute

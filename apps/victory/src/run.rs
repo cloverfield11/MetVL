@@ -191,7 +191,7 @@ pub fn run(
     #[cfg(target_os = "macos")]
     {
         println!("display        initializing native Apple Metal window (1920x1080)...");
-        match victory_gpu::create_native_window("Grand Theft Auto VI - Americas (Apple Silicon Metal)", 1920, 1080) {
+        match victory_gpu::create_native_window("MetVL - Grand Theft Auto VI (Apple Silicon Metal)", 1920, 1080) {
             Ok(_) => println!("display        CAMetalLayer window active"),
             Err(e) => eprintln!("display error: failed to create CAMetalLayer window: {e}"),
         }
