@@ -9,4 +9,4 @@ fi
 
 export VICTORY_SKIP_CPU_CHECK=1
 export VICTORY_AB=0
-exec "$DIR/victory" run "$EXE" --execute
+exec "$DIR/victory" run "$EXE" --unimplemented zero --execute
