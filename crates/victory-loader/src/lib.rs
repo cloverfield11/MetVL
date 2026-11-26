@@ -23,7 +23,10 @@
 
 #[cfg(windows)]
 mod console_insn;
+#[cfg(windows)]
 mod crash;
+#[cfg(not(windows))]
+mod unix;
 pub mod prepare;
 pub(crate) mod publish;
 pub mod resolve;
@@ -47,6 +50,11 @@ mod windows;
 #[cfg(windows)]
 pub use crash::{
     locate, log_crash, log_crashes_to, note_title_output, report_crashes, report_unhandled,
+};
+#[cfg(not(windows))]
+pub use unix::{
+    locate, log_crash, log_crashes_to, note_title_output, report_crashes, report_unhandled,
+    disable_thread_calls,
 };
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use crash::save_on_crash;

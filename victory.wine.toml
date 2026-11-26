@@ -1,0 +1,5 @@
+[paths]
+game_dir = 'Z:\Volumes\ZALUPA\scarlet-americas'
+cache_dir = 'Z:\Users\igor\.cache\victory\cache'
+data_dir = 'Z:\Users\igor\.cache\victory\data'
+test_titles = []

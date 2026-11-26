@@ -9,6 +9,7 @@ mod inspect;
 mod replay;
 mod run;
 mod shader;
+#[cfg(windows)]
 mod translate;
 #[cfg(windows)]
 mod warm;
@@ -73,6 +74,7 @@ enum Command {
     },
     /// Run every shader found (containers, SGD5 files) through the
     /// translator and report what it cannot handle yet.
+    #[cfg(windows)]
     Translate {
         paths: Vec<PathBuf>,
         /// Check emitted DXIL with dxil.dll's validator (`VICTORY_DXIL`,
@@ -99,6 +101,7 @@ enum Command {
     /// Translate every shader found (as `translate` finds them) into the
     /// shader cache, so that no run has to: a few minutes, once per change
     /// of the translator.
+    #[cfg(windows)]
     Shaders {
         paths: Vec<PathBuf>,
         /// Worker threads (default: every logical core).
@@ -192,6 +195,7 @@ fn main() -> Result<()> {
             verbose,
             disasm,
         } => shader::run(paths, verbose || disasm, disasm),
+        #[cfg(windows)]
         Command::Translate {
             paths,
             validate,
@@ -213,6 +217,7 @@ fn main() -> Result<()> {
             }
             translate::run(paths, validate, pipelines, list, jobs)
         }
+        #[cfg(windows)]
         Command::Shaders { paths, jobs } => translate::precompile(paths, jobs),
         #[cfg(windows)]
         Command::Warm { jobs, limit, again, used, these } => warm::run(jobs, limit, again, used, these),

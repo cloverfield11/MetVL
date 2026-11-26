@@ -28,6 +28,7 @@ fn words(text: &str) -> Vec<Word> {
 }
 
 /// `word` of the image at `base`; `None` if it cannot be read.
+#[cfg(windows)]
 fn read(base: usize, word: &Word) -> Option<u64> {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
@@ -44,6 +45,11 @@ fn read(base: usize, word: &Word) -> Option<u64> {
         )
     };
     (ok != 0).then(|| u64::from_le_bytes(value))
+}
+
+#[cfg(not(windows))]
+fn read(_base: usize, _word: &Word) -> Option<u64> {
+    None
 }
 
 /// Starts watching the image at `base`, if asked for.

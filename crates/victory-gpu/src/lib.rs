@@ -94,6 +94,11 @@ mod watch;
 #[cfg(windows)]
 mod texback;
 
+#[cfg(target_os = "macos")]
+pub mod metal_backend;
+#[cfg(target_os = "macos")]
+pub mod metal_presenter;
+
 #[cfg(windows)]
 pub use host::on_failure;
 

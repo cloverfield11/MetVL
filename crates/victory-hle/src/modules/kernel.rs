@@ -430,8 +430,14 @@ pub extern "system" fn SetThreadPriority(thread: *mut c_void, priority: i32) -> 
     static AS_SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let as_set = *AS_SET.get_or_init(|| std::env::var_os("VICTORY_TITLE_PRIORITIES").is_some_and(|v| v == "0"));
     let priority = if as_set { priority } else { title_priority(priority) };
+    #[cfg(windows)]
     // SAFETY: the title passes a thread handle.
     unsafe { windows_sys::Win32::System::Threading::SetThreadPriority(thread, priority) }
+    #[cfg(not(windows))]
+    {
+        let _ = (thread, priority);
+        1 // TRUE
+    }
 }
 
 pub(crate) fn module() -> HleModule {
