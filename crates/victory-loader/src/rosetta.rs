@@ -16,11 +16,14 @@
 
 use anyhow::{Result, bail};
 use victory_pe::ImageInfo;
+#[cfg(windows)]
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+#[cfg(windows)]
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_READWRITE,
     VirtualAlloc, VirtualProtect,
 };
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
@@ -36,8 +39,9 @@ unsafe fn neutralize_watchdogs(base: usize, info: &ImageInfo) {
     {
         let start = base + section.rva as usize;
         let len = section.virtual_size as usize;
-        let mut old = 0;
+        #[cfg(windows)]
         unsafe {
+            let mut old = 0;
             if VirtualProtect(start as _, len, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
                 let slice = std::slice::from_raw_parts_mut(start as *mut u8, len);
                 let mut i = 0;
@@ -55,6 +59,27 @@ unsafe fn neutralize_watchdogs(base: usize, info: &ImageInfo) {
                 }
                 VirtualProtect(start as _, len, old, &mut old);
                 FlushInstructionCache(GetCurrentProcess(), start as _, len);
+            }
+        }
+        #[cfg(not(windows))]
+        unsafe {
+            let aligned_start = start & !4095;
+            let aligned_len = (start + len - aligned_start).next_multiple_of(4096);
+            if libc::mprotect(aligned_start as *mut libc::c_void, aligned_len, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) == 0 {
+                let slice = std::slice::from_raw_parts_mut(start as *mut u8, len);
+                let mut i = 0;
+                while i + 11 <= slice.len() {
+                    if slice[i..i + 7] == [0xc7, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00] {
+                        let len = if i + 12 <= slice.len() && slice[i + 11] == 0xcc { 12 } else { 11 };
+                        slice[i..i + len].fill(0x90);
+                        slice[i] = 0xc3; // ret
+                        total += 1;
+                        i += len;
+                    } else {
+                        i += 1;
+                    }
+                }
+                libc::mprotect(aligned_start as *mut libc::c_void, aligned_len, libc::PROT_READ | libc::PROT_EXEC);
             }
         }
     }
@@ -117,16 +142,28 @@ pub(crate) unsafe fn patch_image(base: usize, info: &ImageInfo) -> Result<usize>
 
     let _ = cursor;
 
-    let mut old = 0;
-    // SAFETY: our thunk allocation.
-    if unsafe { VirtualProtect(thunk_base.cast(), thunk_bytes, PAGE_EXECUTE_READ, &mut old) } == 0 {
-        bail!(
-            "VirtualProtect(maskmov thunks) failed: {}",
-            std::io::Error::last_os_error()
-        );
+    #[cfg(windows)]
+    {
+        let mut old = 0;
+        // SAFETY: our thunk allocation.
+        if unsafe { VirtualProtect(thunk_base.cast(), thunk_bytes, PAGE_EXECUTE_READ, &mut old) } == 0 {
+            bail!(
+                "VirtualProtect(maskmov thunks) failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        // SAFETY: our process.
+        unsafe { FlushInstructionCache(GetCurrentProcess(), thunk_base.cast(), thunk_bytes) };
     }
-    // SAFETY: our process.
-    unsafe { FlushInstructionCache(GetCurrentProcess(), thunk_base.cast(), thunk_bytes) };
+    #[cfg(not(windows))]
+    {
+        if unsafe { libc::mprotect(thunk_base.cast(), thunk_bytes, libc::PROT_READ | libc::PROT_EXEC) } != 0 {
+            bail!(
+                "mprotect(maskmov thunks) failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
 
     // Patch executable sections.
     for section in info
@@ -137,29 +174,56 @@ pub(crate) unsafe fn patch_image(base: usize, info: &ImageInfo) -> Result<usize>
         let start = base + section.rva as usize;
         let len = section.virtual_size as usize;
         let end = start + len;
-        let mut old = 0;
-        // SAFETY: mapped image section.
-        if unsafe { VirtualProtect(start as _, len, PAGE_EXECUTE_READWRITE, &mut old) } == 0 {
-            bail!(
-                "VirtualProtect(code for maskmov) failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-        for (&(site_va, insn_len, _), &target_va) in sites.iter().zip(&call_targets) {
-            if site_va >= start && site_va + insn_len <= end {
-                let rel = (target_va as i64) - ((site_va + 5) as i64);
-                // SAFETY: writable section.
-                let slice =
-                    unsafe { std::slice::from_raw_parts_mut(site_va as *mut u8, insn_len) };
-                slice[0] = 0xE8; // call rel32
-                slice[1..5].copy_from_slice(&(rel as i32).to_le_bytes());
-                slice[5..].fill(0x90); // nop padding
+        #[cfg(windows)]
+        {
+            let mut old = 0;
+            // SAFETY: mapped image section.
+            if unsafe { VirtualProtect(start as _, len, PAGE_EXECUTE_READWRITE, &mut old) } == 0 {
+                bail!(
+                    "VirtualProtect(code for maskmov) failed: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            for (&(site_va, insn_len, _), &target_va) in sites.iter().zip(&call_targets) {
+                if site_va >= start && site_va + insn_len <= end {
+                    let rel = (target_va as i64) - ((site_va + 5) as i64);
+                    // SAFETY: writable section.
+                    let slice =
+                        unsafe { std::slice::from_raw_parts_mut(site_va as *mut u8, insn_len) };
+                    slice[0] = 0xE8; // call rel32
+                    slice[1..5].copy_from_slice(&(rel as i32).to_le_bytes());
+                    slice[5..].fill(0x90); // nop padding
+                }
+            }
+            // SAFETY: restore protection and flush icache.
+            unsafe {
+                VirtualProtect(start as _, len, old, &mut old);
+                FlushInstructionCache(GetCurrentProcess(), start as _, len);
             }
         }
-        // SAFETY: restore protection and flush icache.
-        unsafe {
-            VirtualProtect(start as _, len, old, &mut old);
-            FlushInstructionCache(GetCurrentProcess(), start as _, len);
+        #[cfg(not(windows))]
+        {
+            let aligned_start = start & !4095;
+            let aligned_len = (start + len - aligned_start).next_multiple_of(4096);
+            if unsafe { libc::mprotect(aligned_start as *mut libc::c_void, aligned_len, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) } != 0 {
+                bail!(
+                    "mprotect(code for maskmov) failed: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            for (&(site_va, insn_len, _), &target_va) in sites.iter().zip(&call_targets) {
+                if site_va >= start && site_va + insn_len <= end {
+                    let rel = (target_va as i64) - ((site_va + 5) as i64);
+                    let slice =
+                        unsafe { std::slice::from_raw_parts_mut(site_va as *mut u8, insn_len) };
+                    slice[0] = 0xE8; // call rel32
+                    slice[1..5].copy_from_slice(&(rel as i32).to_le_bytes());
+                    slice[5..].fill(0x90); // nop padding
+                }
+            }
+            unsafe {
+                libc::mprotect(aligned_start as *mut libc::c_void, aligned_len, libc::PROT_READ | libc::PROT_EXEC);
+            }
         }
     }
 
@@ -473,6 +537,7 @@ fn emit_vmovdqu_load(out: &mut Vec<u8>, reg: u8, is_256: bool, disp8: u8) {
     }
 }
 
+#[cfg(windows)]
 fn alloc_near(base: usize, image_size: usize, alloc_bytes: usize) -> Result<*mut u8> {
     const GRANULE: usize = 0x1_0000;
     let above = (base + image_size).next_multiple_of(GRANULE);
@@ -493,6 +558,39 @@ fn alloc_near(base: usize, image_size: usize, alloc_bytes: usize) -> Result<*mut
             };
             if !p.is_null() {
                 return Ok(p.cast());
+            }
+        }
+    }
+    bail!("no free region near the image for Rosetta maskmov thunks")
+}
+
+#[cfg(not(windows))]
+fn alloc_near(base: usize, image_size: usize, alloc_bytes: usize) -> Result<*mut u8> {
+    const GRANULE: usize = 0x1_0000;
+    let above = (base + image_size).next_multiple_of(GRANULE);
+    for k in 0..(1usize << 14) {
+        for hint in [
+            base.checked_sub((k + 1) * GRANULE + alloc_bytes),
+            Some(above + k * GRANULE),
+        ] {
+            let Some(hint) = hint else { continue };
+            let p = unsafe {
+                libc::mmap(
+                    hint as *mut libc::c_void,
+                    alloc_bytes,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                )
+            };
+            if p != libc::MAP_FAILED {
+                let diff = (p as usize).abs_diff(base);
+                if diff < 0x7000_0000 {
+                    return Ok(p.cast());
+                } else {
+                    unsafe { libc::munmap(p, alloc_bytes); }
+                }
             }
         }
     }

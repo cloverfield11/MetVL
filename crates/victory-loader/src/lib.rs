@@ -36,8 +36,8 @@ pub mod resolve;
 mod profile;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
-#[cfg(windows)]
-mod rosetta;
+#[cfg(any(windows, all(unix, target_arch = "x86_64")))]
+pub(crate) mod rosetta;
 #[cfg(windows)]
 mod threads;
 #[cfg(windows)]
