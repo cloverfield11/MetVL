@@ -81,6 +81,9 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=d3dmetal-native");
         println!("cargo:rustc-link-lib=framework=QuartzCore");
         println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=framework=CoreGraphics");
+        println!("cargo:rustc-link-lib=framework=ImageIO");
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=c++");
     }
 }

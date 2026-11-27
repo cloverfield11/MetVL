@@ -41,6 +41,9 @@ uint64_t d3dmetal_bridge_frames_presented(void);
 /// Returns whether the bridge is initialized and ready.
 bool d3dmetal_bridge_is_active(void);
 
+/// Loads an image file (e.g. PNG) directly into the presentation texture buffer.
+bool d3dmetal_bridge_load_image_file(const char* filepath);
+
 #ifdef __cplusplus
 }
 #endif

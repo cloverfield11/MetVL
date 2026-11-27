@@ -114,6 +114,7 @@ unsafe extern "C" {
     pub fn d3dmetal_bridge_execute();
     pub fn d3dmetal_bridge_present();
     pub fn d3dmetal_bridge_upload_frame(pixels: *const u8, width: u32, height: u32, pitch: u32);
+    pub fn d3dmetal_bridge_load_image_file(filepath: *const std::ffi::c_char) -> bool;
     pub fn d3dmetal_bridge_frames_presented() -> u64;
     pub fn d3dmetal_bridge_is_active() -> bool;
 }

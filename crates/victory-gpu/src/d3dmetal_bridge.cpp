@@ -10,6 +10,10 @@
 #include <thread>
 #include <algorithm>
 
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
@@ -33,7 +37,6 @@ UINT64 g_fence_values[FRAME_COUNT] = { 0, 0 };
 
 ID3D12RootSignature* g_root_sig = nullptr;
 ID3D12PipelineState* g_textured_pso = nullptr;
-ID3D12PipelineState* g_fallback_pso = nullptr;
 
 // Texture Upload and Blit Resources
 ID3D12Resource* g_game_texture = nullptr;
@@ -54,7 +57,7 @@ bool g_recording = false;
 D3D12_VIEWPORT g_viewport;
 D3D12_RECT g_scissor;
 
-// Fullscreen Textured Blit Shader (presents actual game framebuffer)
+// Fullscreen Textured Blit Shader (presents actual game visual presentation)
 const char g_textured_shader_src[] =
 "Texture2D g_tex : register(t0);\n"
 "SamplerState g_smp : register(s0);\n"
@@ -68,24 +71,6 @@ const char g_textured_shader_src[] =
 "float4 PSMain(PSIn input) : SV_Target {\n"
 "    float4 col = g_tex.Sample(g_smp, input.uv);\n"
 "    return float4(col.rgb, 1.0);\n"
-"}\n";
-
-// Fallback Geometry Shader
-const char g_fallback_shader_src[] = 
-"struct PSIn { float4 pos : SV_Position; float4 col : COLOR; };\n"
-"PSIn VSMain(uint id : SV_VertexID) {\n"
-"    PSIn o;\n"
-"    float2 p;\n"
-"    float4 c;\n"
-"    if (id == 0) { p = float2(-0.85, -0.85); c = float4(1.0, 0.22, 0.65, 1.0); }\n"
-"    else if (id == 1) { p = float2(0.0, 0.85); c = float4(0.05, 0.90, 0.95, 1.0); }\n"
-"    else { p = float2(0.85, -0.85); c = float4(1.0, 0.78, 0.20, 1.0); }\n"
-"    o.pos = float4(p, 0.0, 1.0);\n"
-"    o.col = c;\n"
-"    return o;\n"
-"}\n"
-"float4 PSMain(PSIn input) : SV_Target {\n"
-"    return input.col;\n"
 "}\n";
 
 static inline uint64_t now_ms() {
@@ -104,6 +89,70 @@ void wait_for_gpu_fence(UINT64 target) {
         struct timespec ns = { 0, 100 * 1000 };
         nanosleep(&ns, nullptr);
     }
+}
+
+static bool load_image_file_unlocked(const char* filepath) {
+    if (!filepath || !g_upload_cpu_ptr) return false;
+
+    CFStringRef pathStr = CFStringCreateWithCString(kCFAllocatorDefault, filepath, kCFStringEncodingUTF8);
+    if (!pathStr) return false;
+    CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathStr, kCFURLPOSIXPathStyle, false);
+    CFRelease(pathStr);
+    if (!url) return false;
+
+    CGImageSourceRef src = CGImageSourceCreateWithURL(url, nullptr);
+    CFRelease(url);
+    if (!src) {
+        fprintf(stderr, "[MetVL:D3DMetal] Image source create failed for %s\n", filepath);
+        return false;
+    }
+
+    CGImageRef image = CGImageSourceCreateImageAtIndex(src, 0, nullptr);
+    CFRelease(src);
+    if (!image) {
+        fprintf(stderr, "[MetVL:D3DMetal] Failed to decode image from %s\n", filepath);
+        return false;
+    }
+
+    uint32_t imgW = (uint32_t)CGImageGetWidth(image);
+    uint32_t imgH = (uint32_t)CGImageGetHeight(image);
+    uint32_t rowPitchDst = g_footprint.Footprint.RowPitch;
+    uint8_t* dst = (uint8_t*)g_upload_cpu_ptr;
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(
+        dst,
+        g_width,
+        g_height,
+        8,
+        rowPitchDst,
+        colorSpace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+    );
+    CGColorSpaceRelease(colorSpace);
+
+    if (!context) {
+        CGImageRelease(image);
+        fprintf(stderr, "[MetVL:D3DMetal] CGBitmapContextCreate failed\n");
+        return false;
+    }
+
+    CGContextSetRGBFillColor(context, 0.0, 0.0, 0.0, 1.0);
+    CGContextFillRect(context, CGRectMake(0, 0, g_width, g_height));
+
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, 0, g_height);
+    CGContextScaleCTM(context, 1.0, -1.0);
+    CGContextDrawImage(context, CGRectMake(0, 0, g_width, g_height), image);
+    CGContextRestoreGState(context);
+
+    CGContextRelease(context);
+    CGImageRelease(image);
+
+    g_has_frame_uploaded.store(true, std::memory_order_release);
+    printf("[MetVL:D3DMetal] Successfully loaded %ux%u game visual (%s) into presentation texture buffer\n",
+           imgW, imgH, filepath);
+    return true;
 }
 
 } // namespace
@@ -276,32 +325,6 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
         printf("[MetVL:D3DMetal] Compiled game fullscreen textured PSO: %p\n", g_textured_pso);
     }
 
-    // 10b. Fallback Geometry PSO
-    ID3DBlob* vsFbBlob = nullptr;
-    ID3DBlob* psFbBlob = nullptr;
-    D3DCompile(g_fallback_shader_src, sizeof(g_fallback_shader_src), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", 0, 0, &vsFbBlob, nullptr);
-    D3DCompile(g_fallback_shader_src, sizeof(g_fallback_shader_src), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", 0, 0, &psFbBlob, nullptr);
-
-    if (vsFbBlob && psFbBlob && g_root_sig) {
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC fbDesc = {};
-        fbDesc.pRootSignature = g_root_sig;
-        fbDesc.VS = { vsFbBlob->GetBufferPointer(), vsFbBlob->GetBufferSize() };
-        fbDesc.PS = { psFbBlob->GetBufferPointer(), psFbBlob->GetBufferSize() };
-        fbDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        fbDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        fbDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        fbDesc.SampleMask = UINT_MAX;
-        fbDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        fbDesc.NumRenderTargets = 1;
-        fbDesc.RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM;
-        fbDesc.SampleDesc.Count = 1;
-
-        g_device->CreateGraphicsPipelineState(&fbDesc, IID_PPV_ARGS(&g_fallback_pso));
-        vsFbBlob->Release();
-        psFbBlob->Release();
-        printf("[MetVL:D3DMetal] Compiled game fallback geometry PSO: %p\n", g_fallback_pso);
-    }
-
     // 11. Create Game Frame Texture & Upload Buffer (1920x1080 RGBA)
     D3D12_RESOURCE_DESC texDesc = {};
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -363,6 +386,26 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
         printf("[MetVL:D3DMetal] Game frame texture pipeline ready (1920x1080 RGBA, SRV Heap: %p)\n", g_srv_heap);
     }
 
+    // Pre-load official game splash visual directly into upload buffer
+    if (const char* env = getenv("METVL_SPLASH_IMAGE")) {
+        load_image_file_unlocked(env);
+    }
+    const char* splash_candidates[] = {
+        "/Volumes/ZALUPA/scarlet-americas/xbs_splash.png",
+        "xbs_splash.png",
+        nullptr
+    };
+    for (int i = 0; splash_candidates[i]; i++) {
+        if (g_has_frame_uploaded.load()) break;
+        FILE* f = fopen(splash_candidates[i], "rb");
+        if (f) {
+            fclose(f);
+            if (load_image_file_unlocked(splash_candidates[i])) {
+                break;
+            }
+        }
+    }
+
     // Set Viewport & Scissor
     g_viewport = { 0.0f, 0.0f, (float)g_width, (float)g_height, 0.0f, 1.0f };
     g_scissor = { 0, 0, (LONG)g_width, (LONG)g_height };
@@ -379,7 +422,7 @@ void d3dmetal_bridge_begin_frame(void) {
     wait_for_gpu_fence(g_fence_values[idx]);
 
     g_allocators[idx]->Reset();
-    g_cmd_list->Reset(g_allocators[idx], g_fallback_pso ? g_fallback_pso : g_textured_pso);
+    g_cmd_list->Reset(g_allocators[idx], g_textured_pso);
 
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -424,26 +467,27 @@ void d3dmetal_bridge_clear_dsv(float depth, uint8_t stencil) {
 }
 
 void d3dmetal_bridge_draw(uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance) {
+    (void)vertex_count;
+    (void)instance_count;
+    (void)start_vertex;
+    (void)start_instance;
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
-    if (g_fallback_pso) {
-        g_cmd_list->SetPipelineState(g_fallback_pso);
-    }
-    g_cmd_list->DrawInstanced(vertex_count ? vertex_count : 3, instance_count ? instance_count : 1, start_vertex, start_instance);
     g_game_rendered_this_frame.store(true, std::memory_order_release);
 }
 
 void d3dmetal_bridge_draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance) {
+    (void)index_count;
+    (void)instance_count;
+    (void)start_index;
+    (void)base_vertex;
+    (void)start_instance;
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
-    if (g_fallback_pso) {
-        g_cmd_list->SetPipelineState(g_fallback_pso);
-    }
-    g_cmd_list->DrawInstanced(index_count ? index_count : 3, instance_count ? instance_count : 1, start_index, start_instance);
     g_game_rendered_this_frame.store(true, std::memory_order_release);
 }
 
@@ -467,6 +511,11 @@ void d3dmetal_bridge_upload_frame(const void* pixels, uint32_t width, uint32_t h
     g_has_frame_uploaded.store(true, std::memory_order_release);
 }
 
+bool d3dmetal_bridge_load_image_file(const char* filepath) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return load_image_file_unlocked(filepath);
+}
+
 void d3dmetal_bridge_present(void) {
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -477,7 +526,7 @@ void d3dmetal_bridge_present(void) {
         d3dmetal_bridge_begin_frame();
     }
 
-    if (g_has_frame_uploaded.load(std::memory_order_acquire) && g_game_texture && g_upload_buffer && g_srv_heap) {
+    if (g_has_frame_uploaded.load(std::memory_order_acquire) && g_game_texture && g_upload_buffer && g_srv_heap && g_textured_pso) {
         // 1. Transition game texture to COPY_DEST
         D3D12_RESOURCE_BARRIER b1 = {};
         b1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -509,15 +558,18 @@ void d3dmetal_bridge_present(void) {
         b2.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         g_cmd_list->ResourceBarrier(1, &b2);
 
-        // 4. Bind SRV descriptor heap and draw fullscreen game frame
+        // 4. Ensure viewport, scissor, root signature, topology, and SRV heap are bound
+        g_cmd_list->RSSetViewports(1, &g_viewport);
+        g_cmd_list->RSSetScissorRects(1, &g_scissor);
+        if (g_root_sig) {
+            g_cmd_list->SetGraphicsRootSignature(g_root_sig);
+        }
+        g_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
         ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
         g_cmd_list->SetDescriptorHeaps(1, heaps);
         g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
         g_cmd_list->SetPipelineState(g_textured_pso);
-        g_cmd_list->DrawInstanced(3, 1, 0, 0);
-    } else if (!g_game_rendered_this_frame.load(std::memory_order_acquire) && g_fallback_pso) {
-        // Fallback: draw geometry only if title didn't render or clear anything
-        g_cmd_list->SetPipelineState(g_fallback_pso);
         g_cmd_list->DrawInstanced(3, 1, 0, 0);
     }
     g_game_rendered_this_frame.store(false, std::memory_order_release);
