@@ -38,6 +38,7 @@ UINT64 g_fence_values[FRAME_COUNT] = { 0, 0 };
 
 ID3D12RootSignature* g_root_sig = nullptr;
 ID3D12PipelineState* g_textured_pso = nullptr;
+ID3DBlob* g_default_vs_blob = nullptr;
 ID3DBlob* g_default_ps_blob = nullptr;
 std::unordered_map<uint64_t, ID3D12PipelineState*> g_pso_map;
 ID3D12PipelineState* g_current_pso = nullptr;
@@ -52,6 +53,11 @@ static std::atomic<bool> g_has_frame_uploaded{false};
 static std::atomic<bool> g_splash_loaded{false};
 static std::atomic<bool> g_game_frame_uploaded{false};
 static std::atomic<bool> g_game_rendered_this_frame{false};
+
+static uint32_t g_user_constants[64] = {0};
+static uint64_t g_bound_targets[8] = {0};
+static uint32_t g_bound_target_count = 0;
+static uint64_t g_bound_depth = 0;
 
 UINT g_rtv_desc_size = 0;
 uint32_t g_width = 1920;
@@ -281,17 +287,25 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
     range.BaseShaderRegister = 0;
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[2] = {};
+    D3D12_ROOT_PARAMETER rootParams[3] = {};
+    // Param 0: 64 Root Constants at b0, space 0
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[0].Constants.ShaderRegister = 0;
     rootParams[0].Constants.RegisterSpace = 0;
     rootParams[0].Constants.Num32BitValues = 64;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &range;
+    // Param 1: Root SRV at t0 in space 1 (for translated DXIL buffer/resource indexing)
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParams[1].Descriptor.ShaderRegister = 0;
+    rootParams[1].Descriptor.RegisterSpace = 1;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    // Param 2: Descriptor Table (1 SRV at t0, space 0 for fullscreen textured pass)
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[2].DescriptorTable.pDescriptorRanges = &range;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -302,7 +316,7 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 2;
+    rsDesc.NumParameters = 3;
     rsDesc.pParameters = rootParams;
     rsDesc.NumStaticSamplers = 1;
     rsDesc.pStaticSamplers = &sampler;
@@ -351,9 +365,9 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
         psoDesc.SampleDesc.Count = 1;
 
         g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_textured_pso));
-        vsBlob->Release();
+        g_default_vs_blob = vsBlob;
         g_default_ps_blob = psBlob;
-        printf("[MetVL:D3DMetal] Compiled game fullscreen textured PSO: %p (default PS cached)\n", g_textured_pso);
+        printf("[MetVL:D3DMetal] Compiled game fullscreen textured PSO: %p (cached default VS & PS)\n", g_textured_pso);
     }
 
     // 11. Create Game Frame Texture & Upload Buffer (1920x1080 RGBA)
@@ -463,12 +477,21 @@ void d3dmetal_bridge_clear_rtv(float r, float g, float b, float a) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
+    // If game has already rendered commands this frame, do NOT clear the backbuffer!
+    // Deferred engines clear offscreen G-buffers between passes and at the end of frames.
+    if (g_game_rendered_this_frame.load(std::memory_order_relaxed)) {
+        return;
+    }
+    // Also ignore transparent black clears (0,0,0,0) which are meant for offscreen buffers.
+    if (r == 0.0f && g == 0.0f && b == 0.0f && a == 0.0f) {
+        return;
+    }
+
     UINT idx = g_swapchain->GetCurrentBackBufferIndex();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = g_rtv_heap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += idx * g_rtv_desc_size;
     const float clearColor[4] = { r, g, b, (a > 0.0f ? a : 1.0f) };
     g_cmd_list->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-    g_game_rendered_this_frame.store(true, std::memory_order_release);
 }
 
 bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_bytes, size_t vs_len, const void* ps_bytes, size_t ps_len) {
@@ -478,10 +501,17 @@ bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_byte
         return true;
     }
 
+    if ((!vs_bytes || vs_len == 0) && (!ps_bytes || ps_len == 0)) {
+        g_pso_map[pipeline_id] = nullptr;
+        return true;
+    }
+
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.pRootSignature = g_root_sig;
     if (vs_bytes && vs_len > 0) {
         psoDesc.VS = { vs_bytes, vs_len };
+    } else if (g_default_vs_blob) {
+        psoDesc.VS = { g_default_vs_blob->GetBufferPointer(), g_default_vs_blob->GetBufferSize() };
     }
     if (ps_bytes && ps_len > 0) {
         psoDesc.PS = { ps_bytes, ps_len };
@@ -510,10 +540,13 @@ bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_byte
         g_pso_map[pipeline_id] = pso;
         printf("[MetVL:D3DMetal] Successfully compiled native in-game PSO for pipeline 0x%llx (VS: %zu B, PS: %zu B)\n",
                (unsigned long long)pipeline_id, vs_len, ps_len);
+        fflush(stdout);
         return true;
     } else {
-        fprintf(stderr, "[MetVL:D3DMetal] CreateGraphicsPipelineState failed for 0x%llx: 0x%08x\n",
+        fprintf(stderr, "[MetVL:D3DMetal] CreateGraphicsPipelineState failed for 0x%llx: 0x%08x (no-op fallback)\n",
                 (unsigned long long)pipeline_id, (unsigned)hr);
+        fflush(stderr);
+        g_pso_map[pipeline_id] = nullptr;
         return false;
     }
 }
@@ -532,6 +565,58 @@ void d3dmetal_bridge_set_pipeline(uint64_t pipeline_id) {
     }
 }
 
+void d3dmetal_bridge_set_graphics_constants(uint32_t slot, uint32_t count, const uint32_t* values, uint32_t offset) {
+    if (!values || count == 0) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (uint32_t i = 0; i < count && (offset + i) < 64; i++) {
+        g_user_constants[offset + i] = values[i];
+    }
+    if (g_recording && g_cmd_list && g_root_sig && slot == 0) {
+        g_cmd_list->SetGraphicsRoot32BitConstants(0, std::min(count, 64u - offset), values, offset);
+    }
+}
+
+void d3dmetal_bridge_set_viewports(uint32_t count, const float* vps) {
+    if (!vps || count == 0) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_viewport.TopLeftX = vps[0];
+    g_viewport.TopLeftY = vps[1];
+    g_viewport.Width = vps[2] > 0.0f ? vps[2] : (float)g_width;
+    g_viewport.Height = vps[3] > 0.0f ? vps[3] : (float)g_height;
+    g_viewport.MinDepth = vps[4];
+    g_viewport.MaxDepth = vps[5] > 0.0f ? vps[5] : 1.0f;
+    if (g_recording && g_cmd_list) {
+        g_cmd_list->RSSetViewports(1, &g_viewport);
+    }
+}
+
+void d3dmetal_bridge_set_scissors(uint32_t count, const int32_t* rects) {
+    if (!rects || count == 0) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_scissor.left = rects[0];
+    g_scissor.top = rects[1];
+    g_scissor.right = rects[2] > 0 ? rects[2] : (LONG)g_width;
+    g_scissor.bottom = rects[3] > 0 ? rects[3] : (LONG)g_height;
+    if (g_recording && g_cmd_list) {
+        g_cmd_list->RSSetScissorRects(1, &g_scissor);
+    }
+}
+
+void d3dmetal_bridge_set_targets(uint32_t count, const uint64_t* handles, uint64_t depth) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_bound_target_count = std::min(count, 8u);
+    for (uint32_t i = 0; i < g_bound_target_count; i++) {
+        g_bound_targets[i] = handles ? handles[i] : 0;
+    }
+    g_bound_depth = depth;
+    if (g_recording && g_cmd_list && g_rtv_heap) {
+        UINT idx = g_swapchain->GetCurrentBackBufferIndex();
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = g_rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += idx * g_rtv_desc_size;
+        g_cmd_list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    }
+}
+
 void d3dmetal_bridge_clear_dsv(float depth, uint8_t stencil) {
     (void)depth;
     (void)stencil;
@@ -540,6 +625,10 @@ void d3dmetal_bridge_clear_dsv(float depth, uint8_t stencil) {
 void d3dmetal_bridge_draw(uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance) {
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_current_pso || g_current_pso == g_textured_pso) {
+        // Skip draw if no valid native in-game pipeline bound
+        return;
+    }
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
     if (g_cmd_list && g_root_sig) {
@@ -547,15 +636,17 @@ void d3dmetal_bridge_draw(uint32_t vertex_count, uint32_t instance_count, uint32
         g_cmd_list->RSSetScissorRects(1, &g_scissor);
         g_cmd_list->SetGraphicsRootSignature(g_root_sig);
         g_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        // Param 0: 64 Root Constants (b0)
+        g_cmd_list->SetGraphicsRoot32BitConstants(0, 64, g_user_constants, 0);
+
+        // Param 1: Descriptor Table (1 SRV at t0)
         if (g_srv_heap) {
             ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
             g_cmd_list->SetDescriptorHeaps(1, heaps);
-            g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
+            g_cmd_list->SetGraphicsRootDescriptorTable(2, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
         }
-        ID3D12PipelineState* pso = g_current_pso ? g_current_pso : g_textured_pso;
-        if (pso) {
-            g_cmd_list->SetPipelineState(pso);
-        }
+        g_cmd_list->SetPipelineState(g_current_pso);
         g_cmd_list->DrawInstanced(vertex_count, instance_count, start_vertex, start_instance);
     }
     g_game_rendered_this_frame.store(true, std::memory_order_release);
@@ -565,6 +656,10 @@ void d3dmetal_bridge_draw_indexed(uint32_t index_count, uint32_t instance_count,
     (void)base_vertex;
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_current_pso || g_current_pso == g_textured_pso) {
+        // Skip draw if no valid native in-game pipeline bound
+        return;
+    }
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
     if (g_cmd_list && g_root_sig) {
@@ -572,15 +667,17 @@ void d3dmetal_bridge_draw_indexed(uint32_t index_count, uint32_t instance_count,
         g_cmd_list->RSSetScissorRects(1, &g_scissor);
         g_cmd_list->SetGraphicsRootSignature(g_root_sig);
         g_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        // Param 0: 64 Root Constants (b0)
+        g_cmd_list->SetGraphicsRoot32BitConstants(0, 64, g_user_constants, 0);
+
+        // Param 1: Descriptor Table (1 SRV at t0)
         if (g_srv_heap) {
             ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
             g_cmd_list->SetDescriptorHeaps(1, heaps);
-            g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
+            g_cmd_list->SetGraphicsRootDescriptorTable(2, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
         }
-        ID3D12PipelineState* pso = g_current_pso ? g_current_pso : g_textured_pso;
-        if (pso) {
-            g_cmd_list->SetPipelineState(pso);
-        }
+        g_cmd_list->SetPipelineState(g_current_pso);
         g_cmd_list->DrawInstanced(index_count, instance_count, start_index, start_instance);
     }
     g_game_rendered_this_frame.store(true, std::memory_order_release);
@@ -665,7 +762,8 @@ void d3dmetal_bridge_present(void) {
 
         ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
         g_cmd_list->SetDescriptorHeaps(1, heaps);
-        g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
+        g_cmd_list->SetGraphicsRoot32BitConstants(0, 64, g_user_constants, 0);
+        g_cmd_list->SetGraphicsRootDescriptorTable(2, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
         g_cmd_list->SetPipelineState(g_textured_pso);
         g_cmd_list->DrawInstanced(3, 1, 0, 0);
         g_game_frame_uploaded.store(false, std::memory_order_release);

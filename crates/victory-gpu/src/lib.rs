@@ -119,6 +119,10 @@ unsafe extern "C" {
         ps_len: usize,
     ) -> bool;
     pub fn d3dmetal_bridge_set_pipeline(pipeline_id: u64);
+    pub fn d3dmetal_bridge_set_graphics_constants(slot: u32, count: u32, values: *const u32, offset: u32);
+    pub fn d3dmetal_bridge_set_viewports(count: u32, vps: *const f32);
+    pub fn d3dmetal_bridge_set_scissors(count: u32, rects: *const i32);
+    pub fn d3dmetal_bridge_set_targets(count: u32, handles: *const u64, depth: u64);
     pub fn d3dmetal_bridge_execute();
     pub fn d3dmetal_bridge_present();
     pub fn d3dmetal_bridge_upload_frame(pixels: *const u8, width: u32, height: u32, pitch: u32);

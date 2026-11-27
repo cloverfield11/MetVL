@@ -33,6 +33,18 @@ bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_byte
 /// Binds an active pipeline state for subsequent draw commands.
 void d3dmetal_bridge_set_pipeline(uint64_t pipeline_id);
 
+/// Sets root 32-bit constants for SM 6.6 direct descriptor heap indexing / push constants.
+void d3dmetal_bridge_set_graphics_constants(uint32_t slot, uint32_t count, const uint32_t* values, uint32_t offset);
+
+/// Sets active viewport(s).
+void d3dmetal_bridge_set_viewports(uint32_t count, const float* vps);
+
+/// Sets scissor rectangle(s).
+void d3dmetal_bridge_set_scissors(uint32_t count, const int32_t* rects);
+
+/// Sets render targets and optional depth/stencil buffer.
+void d3dmetal_bridge_set_targets(uint32_t count, const uint64_t* handles, uint64_t depth);
+
 /// Submits recorded commands to the Apple Silicon GPU queue.
 void d3dmetal_bridge_execute(void);
 
