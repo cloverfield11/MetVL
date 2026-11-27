@@ -14,8 +14,16 @@ use std::ffi::c_void;
 use std::sync::Mutex;
 
 use opus_pure::OpusDecoder;
+
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent};
+
+#[cfg(not(windows))]
+use super::unix_crt::{CloseHandle, CreateEventW, SetEvent};
+#[cfg(not(windows))]
+type HANDLE = *mut c_void;
 
 use super::xasync::E_INVALIDARG;
 use super::xgameruntime::{HRESULT, S_OK};
@@ -181,7 +189,7 @@ pub extern "win64" fn XApuConnect(
     }
     let event = if input.options & RESULT_EVENT != 0 {
         // SAFETY: plain auto-reset event, no name.
-        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        let event = unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, std::ptr::null()) };
         if event.is_null() {
             // SAFETY: allocated above with `layout`.
             unsafe { std::alloc::dealloc(memory, layout) };

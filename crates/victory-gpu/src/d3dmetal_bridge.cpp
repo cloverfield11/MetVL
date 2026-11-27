@@ -140,11 +140,7 @@ static bool load_image_file_unlocked(const char* filepath) {
     CGContextSetRGBFillColor(context, 0.0, 0.0, 0.0, 1.0);
     CGContextFillRect(context, CGRectMake(0, 0, g_width, g_height));
 
-    CGContextSaveGState(context);
-    CGContextTranslateCTM(context, 0, g_height);
-    CGContextScaleCTM(context, 1.0, -1.0);
     CGContextDrawImage(context, CGRectMake(0, 0, g_width, g_height), image);
-    CGContextRestoreGState(context);
 
     CGContextRelease(context);
     CGImageRelease(image);

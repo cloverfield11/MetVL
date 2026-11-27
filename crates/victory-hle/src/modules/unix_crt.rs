@@ -1415,6 +1415,21 @@ pub extern "win64" fn SleepConditionVariableSRW(_cv: *mut c_void, _lock: *mut c_
 pub extern "win64" fn SleepConditionVariableCS(_cv: *mut c_void, _cs: *mut c_void, _ms: u32) -> i32 { 1 }
 pub extern "win64" fn WakeAllConditionVariable(_cv: *mut c_void) {}
 pub extern "win64" fn WakeConditionVariable(_cv: *mut c_void) {}
+pub extern "win64" fn InitializeConditionVariable(cv: *mut c_void) {
+    if !cv.is_null() {
+        unsafe { *(cv as *mut *mut c_void) = std::ptr::null_mut(); }
+    }
+}
+pub extern "win64" fn LocaleNameToLCID(_lp_name: *const u16, _dw_flags: u32) -> u32 {
+    1033 // en-US (0x0409)
+}
+pub extern "win64" fn AddVectoredExceptionHandler(_first: u32, _handler: *mut c_void) -> *mut c_void {
+    0x1000 as *mut c_void
+}
+pub extern "win64" fn RemoveVectoredExceptionHandler(_handle: *mut c_void) -> u32 {
+    1
+}
+pub extern "win64" fn RaiseException(_code: u32, _flags: u32, _n_args: u32, _args: *const usize) {}
 
 pub extern "win64" fn InitializeCriticalSection(cs: *mut c_void) {
     if !cs.is_null() {
@@ -3029,6 +3044,11 @@ pub(crate) fn module() -> HleModule {
             hle_export!(SleepConditionVariableCS),
             hle_export!(WakeAllConditionVariable),
             hle_export!(WakeConditionVariable),
+            hle_export!(InitializeConditionVariable),
+            hle_export!(LocaleNameToLCID),
+            hle_export!(AddVectoredExceptionHandler),
+            hle_export!(RemoveVectoredExceptionHandler),
+            hle_export!(RaiseException),
             hle_export!(InitializeCriticalSection),
             hle_export!(DeleteCriticalSection),
             hle_export!(EnterCriticalSection),

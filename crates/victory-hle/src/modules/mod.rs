@@ -8,7 +8,6 @@
 //! `file` (package paths), `thread` (TLS callbacks for title threads),
 //! `xaudio2`, `xstore` stubs.
 
-#[cfg(windows)]
 pub mod apu;
 pub mod audio;
 pub mod d3d12x;
@@ -69,7 +68,6 @@ pub(crate) fn all() -> Vec<HleModule> {
         dsp::module(),
         xg::module(),
     ];
-    #[cfg(windows)]
     all.push(apu::module());
     #[cfg(windows)]
     all.push(media::module());

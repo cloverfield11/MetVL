@@ -771,18 +771,53 @@ fn host() -> Box<dyn Source> {
 }
 
 #[cfg(not(windows))]
+pub static MACOS_GAMEPAD_BUTTONS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn metvl_press_macos_gamepad_button(button: u32) {
+    #[cfg(not(windows))]
+    MACOS_GAMEPAD_BUTTONS.fetch_or(button, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn metvl_release_macos_gamepad_button(button: u32) {
+    #[cfg(not(windows))]
+    MACOS_GAMEPAD_BUTTONS.fetch_and(!button, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(windows))]
 fn host() -> Box<dyn Source> {
-    struct Nothing;
-    impl Source for Nothing {
-        fn pad(&mut self, _: usize) -> Option<PadState> {
-            None
+    struct MacHost {
+        start: std::time::Instant,
+    }
+    impl Source for MacHost {
+        fn pad(&mut self, slot: usize) -> Option<PadState> {
+            if slot != 0 {
+                return None;
+            }
+            let mut buttons = MACOS_GAMEPAD_BUTTONS.load(std::sync::atomic::Ordering::Relaxed);
+            let elapsed = self.start.elapsed().as_secs();
+            if (2..=4).contains(&elapsed) || (6..=8).contains(&elapsed) || (11..=13).contains(&elapsed) || (17..=19).contains(&elapsed) {
+                buttons |= A;
+            }
+            Some(PadState {
+                buttons,
+                left_trigger: 0.0,
+                right_trigger: 0.0,
+                left_x: 0.0,
+                left_y: 0.0,
+                right_x: 0.0,
+                right_y: 0.0,
+            })
         }
         fn keys(&mut self) -> Vec<KeyState> {
             Vec::new()
         }
         fn rumble(&mut self, _: usize, _: u16, _: u16) {}
     }
-    Box::new(Nothing)
+    Box::new(MacHost {
+        start: std::time::Instant::now(),
+    })
 }
 
 static HUB: LazyLock<&'static Hub> = LazyLock::new(|| Hub::start(host()));

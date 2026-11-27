@@ -323,6 +323,38 @@ pub fn pump_cocoa_events_until(
                 dequeue: YES
             ];
             if !event.is_null() {
+                let event_type: usize = msg_send![event, type];
+                if event_type == 10 { // NSKeyDown
+                    let key_code: u16 = msg_send![event, keyCode];
+                    let btn = match key_code {
+                        36 | 49 => 0x4, // Return | Space -> A
+                        51 => 0x8,      // Backspace -> B
+                        7 => 0x10,      // X -> X
+                        16 => 0x20,     // Y -> Y
+                        53 => 0x1,      // Esc -> Menu
+                        48 => 0x2,      // Tab -> View
+                        _ => 0,
+                    };
+                    if btn != 0 {
+                        unsafe extern "C" { fn metvl_press_macos_gamepad_button(button: u32); }
+                        unsafe { metvl_press_macos_gamepad_button(btn) };
+                    }
+                } else if event_type == 11 { // NSKeyUp
+                    let key_code: u16 = msg_send![event, keyCode];
+                    let btn = match key_code {
+                        36 | 49 => 0x4,
+                        51 => 0x8,
+                        7 => 0x10,
+                        16 => 0x20,
+                        53 => 0x1,
+                        48 => 0x2,
+                        _ => 0,
+                    };
+                    if btn != 0 {
+                        unsafe extern "C" { fn metvl_release_macos_gamepad_button(button: u32); }
+                        unsafe { metvl_release_macos_gamepad_button(btn) };
+                    }
+                }
                 let () = msg_send![app, sendEvent: event];
                 let () = msg_send![app, updateWindows];
             }
