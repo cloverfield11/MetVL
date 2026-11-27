@@ -42,4 +42,45 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-env=VICTORY_TRANSLATOR={}", hash.finalize().to_hex());
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rerun-if-changed=src/d3dmetal_bridge.cpp");
+        println!("cargo:rerun-if-changed=src/d3dmetal_bridge.h");
+
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let obj_path = out_dir.join("d3dmetal_bridge.o");
+        let lib_path = out_dir.join("libd3dmetal_bridge.a");
+
+        let status = std::process::Command::new("clang++")
+            .args(&[
+                "-arch", "x86_64",
+                "-std=c++17",
+                "-c",
+                "-I", "/Users/igor/Downloads/d3dmetal-native/include",
+                "-I", "/Users/igor/Downloads/d3dmetal-native/include/native/directx",
+                "-I", "/Users/igor/Downloads/d3dmetal-native/include/native/windows",
+                "-I", "/Users/igor/Downloads/d3dmetal-native/subprojects/directx-native/include",
+                "-DWIDL_EXPLICIT_AGGREGATE_RETURNS=1",
+                "src/d3dmetal_bridge.cpp",
+                "-o", obj_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("failed to compile d3dmetal_bridge.cpp");
+        assert!(status.success(), "clang++ compilation failed");
+
+        let status = std::process::Command::new("ar")
+            .args(&["crus", lib_path.to_str().unwrap(), obj_path.to_str().unwrap()])
+            .status()
+            .expect("failed to create libd3dmetal_bridge.a");
+        assert!(status.success(), "ar failed");
+
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+        println!("cargo:rustc-link-lib=static=d3dmetal_bridge");
+        println!("cargo:rustc-link-search=native=/Users/igor/Downloads/d3dmetal-native/build");
+        println!("cargo:rustc-link-lib=dylib=d3dmetal-native");
+        println!("cargo:rustc-link-lib=framework=QuartzCore");
+        println!("cargo:rustc-link-lib=framework=Metal");
+        println!("cargo:rustc-link-lib=c++");
+    }
 }

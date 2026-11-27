@@ -164,7 +164,7 @@ pub(crate) fn texture_layout(desc: &ResourceDesc) -> Option<texture::Texture> {
     let swizzle = match desc.layout {
         0 if dimension == Dimension::Tex1d => Swizzle::LINEAR,
         0 if desc.flags & DEPTH != 0 => Swizzle::SW_64KB_Z_X,
-        0 if desc.flags & RENDER_TARGET != 0 => Swizzle::SW_64KB_R_X,
+        0 if desc.flags & RENDER_TARGET != 0 => Swizzle::LINEAR,
         0 => Swizzle::SW_4KB_S,
         1 => Swizzle::LINEAR,
         l if l & !0xff == 0x100 => Swizzle(l & 0xff),
@@ -2975,7 +2975,7 @@ pub(crate) fn texture_kind(this: This) -> Option<(u64, u32, u32)> {
 /// Texture `this`'s console layout (one plane), where it lies in title
 /// memory and the bytes that layout takes, for `crate::texback`; `None` for
 /// a buffer or a texture with planes.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn title_texture(this: This) -> Option<(victory_formats::texture::Layout, usize, usize)> {
     if this.is_null() {
         return None;

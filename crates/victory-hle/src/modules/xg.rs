@@ -61,7 +61,7 @@ fn suggested(desc: &ResourceDesc) -> Swizzle {
     } else if desc.flags & ALLOW_DEPTH_STENCIL != 0 {
         Swizzle::SW_64KB_Z_X
     } else if desc.flags & ALLOW_RENDER_TARGET != 0 {
-        Swizzle::SW_64KB_R_X
+        Swizzle::LINEAR
     } else {
         Swizzle::SW_4KB_S
     }

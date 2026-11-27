@@ -277,8 +277,16 @@ pub fn create_native_window(title: &str, width: u32, height: u32) -> Result<(), 
         let () = msg_send![app, finishLaunching];
         let () = msg_send![app, activateIgnoringOtherApps: YES];
 
-        let presenter = MetalPresenter::new(layer, width, height)?;
+        let presenter = MetalPresenter::new(layer.clone(), width, height)?;
         let _ = PRESENTER.set(presenter);
+
+        let raw_layer = layer.as_ref() as *const _ as *mut std::ffi::c_void;
+        let bridge_ok = crate::d3dmetal_bridge_init(raw_layer, width, height);
+        if bridge_ok {
+            tracing::info!("D3DMetal bridge connected to CAMetalLayer window ({width}x{height})");
+        } else {
+            tracing::warn!("Failed to initialize D3DMetal bridge on CAMetalLayer");
+        }
 
         let pool: *mut Object = msg_send![class!(NSAutoreleasePool), alloc];
         let pool: *mut Object = msg_send![pool, init];

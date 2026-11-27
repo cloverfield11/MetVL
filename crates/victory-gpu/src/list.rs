@@ -1387,7 +1387,19 @@ extern "win64" fn clear_rtv(
         }
     }
     #[cfg(not(windows))]
-    let _ = (this, handle, color, count, rects);
+    {
+        let _ = (this, count, rects);
+        static CLEAR_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if CLEAR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            eprintln!("[MetVL:ClearRTV] handle={:#x} color={:?}", handle, if !color.is_null() { Some(unsafe { *color }) } else { None });
+        }
+        if !color.is_null() {
+            let c = unsafe { *color };
+            unsafe { crate::d3dmetal_bridge_clear_rtv(c[0], c[1], c[2], c[3]) };
+        } else {
+            unsafe { crate::d3dmetal_bridge_clear_rtv(0.12, 0.08, 0.25, 1.0) };
+        }
+    }
 }
 
 /// `ClearDepthStencilView(handle, flags, depth, stencil, count, rects)`;
@@ -1543,6 +1555,10 @@ static ALLOCATOR_FUNCTIONS: Table<24> = {
 
 extern "win64" fn set_pipeline(this: This, pipeline: This) {
     crate::pipeline::bound(pipeline);
+    static PIPE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if PIPE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+        eprintln!("[MetVL:SetPipeline] pipeline={:p}", pipeline);
+    }
     #[cfg(windows)]
     with_state(this, |_, state| state.set_pipeline(pipeline));
     #[cfg(not(windows))]
@@ -1836,9 +1852,9 @@ mod state {
 /// Without a host GPU every draw state call is ignored.
 #[cfg(not(windows))]
 mod state {
+    use super::*;
+
     pub(super) use super::dispatch;
-    pub(super) use super::draw;
-    pub(super) use super::draw as draw_indexed;
     pub(super) use super::draw as dispatch_mesh;
     pub(super) use super::draw as dispatch_mesh_x;
     pub(super) use super::ignored_state as blend_factor;
@@ -1855,10 +1871,75 @@ mod state {
     pub(super) use super::ignored_state as scissors;
     pub(super) use super::ignored_state as stencil_ref;
     pub(super) use super::ignored_state as depth_bounds;
-    pub(super) use super::ignored_state as targets;
     pub(super) use super::ignored_state as topology;
     pub(super) use super::ignored_state as vertex_buffers;
-    pub(super) use super::ignored_state as viewports;
+
+    pub(super) extern "win64" fn targets(
+        this: This,
+        count: u32,
+        handles: *const u64,
+        one_range: i32,
+        depth: *const u64,
+    ) {
+        let _ = (this, one_range);
+        static TARGET_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if TARGET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            let h0 = if !handles.is_null() && count > 0 { unsafe { *handles } } else { 0 };
+            let d0 = if !depth.is_null() { unsafe { *depth } } else { 0 };
+            eprintln!("[MetVL:SetTargets] count={count} handle0={h0:#x} depth={d0:#x}");
+        }
+    }
+
+    pub(super) extern "win64" fn viewports(
+        this: This,
+        count: u32,
+        viewports: *const u8,
+    ) {
+        let _ = (this, viewports);
+        static VP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if VP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            eprintln!("[MetVL:SetViewports] count={count}");
+        }
+    }
+
+    pub(super) extern "win64" fn draw(
+        this: This,
+        vertices: u32,
+        instances: u32,
+        first: u32,
+        first_instance: u32,
+    ) {
+        let _ = this;
+        super::count_draw();
+        static DRAW_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if DRAW_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            eprintln!("[MetVL:Draw] vertices={vertices} instances={instances} first={first} first_instance={first_instance}");
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            crate::d3dmetal_bridge_draw(vertices, instances, first, first_instance);
+        }
+    }
+
+    pub(super) extern "win64" fn draw_indexed(
+        this: This,
+        indices: u32,
+        instances: u32,
+        first: u32,
+        base: i32,
+        first_instance: u32,
+    ) {
+        let _ = this;
+        super::count_draw();
+        static DRAW_IDX_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if DRAW_IDX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            eprintln!("[MetVL:DrawIndexed] indices={indices} instances={instances} first={first} base={base} first_instance={first_instance}");
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            crate::d3dmetal_bridge_draw_indexed(indices, instances, first, base, first_instance);
+        }
+    }
 }
 
 fn count_draw() {

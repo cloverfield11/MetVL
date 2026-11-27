@@ -103,6 +103,21 @@ pub use metal_presenter::{MetalPresenter, create_native_window, pump_cocoa_event
 #[cfg(target_os = "macos")]
 pub use metal_backend::{context, UnifiedBuffer};
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    pub fn d3dmetal_bridge_init(metal_layer: *mut std::ffi::c_void, width: u32, height: u32) -> bool;
+    pub fn d3dmetal_bridge_begin_frame();
+    pub fn d3dmetal_bridge_clear_rtv(r: f32, g: f32, b: f32, a: f32);
+    pub fn d3dmetal_bridge_clear_dsv(depth: f32, stencil: u8);
+    pub fn d3dmetal_bridge_draw(vertex_count: u32, instance_count: u32, start_vertex: u32, start_instance: u32);
+    pub fn d3dmetal_bridge_draw_indexed(index_count: u32, instance_count: u32, start_index: u32, base_vertex: i32, start_instance: u32);
+    pub fn d3dmetal_bridge_execute();
+    pub fn d3dmetal_bridge_present();
+    pub fn d3dmetal_bridge_upload_frame(pixels: *const u8, width: u32, height: u32, pitch: u32);
+    pub fn d3dmetal_bridge_frames_presented() -> u64;
+    pub fn d3dmetal_bridge_is_active() -> bool;
+}
+
 #[cfg(windows)]
 pub use host::on_failure;
 

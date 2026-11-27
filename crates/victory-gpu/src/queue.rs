@@ -1043,6 +1043,58 @@ extern "win64" fn present(
     }
     #[cfg(target_os = "macos")]
     {
+        eprintln!("[MetVL:Present] frame={} planes={} params={:p}", frame, planes, plane_parameters);
+        if unsafe { crate::d3dmetal_bridge_is_active() } {
+            if planes > 0 && !plane_parameters.is_null() {
+                unsafe {
+                    let plane = &*plane_parameters;
+                    eprintln!("[MetVL:Present] plane token={} count={} res_ptr={:p}", plane.token, plane.count, plane.resources);
+                    if plane.count > 0 && !plane.resources.is_null() {
+                        let res = *plane.resources;
+                        if let Some((layout, addr, size)) = crate::resource::title_texture(res) {
+                            let width = 1920u32;
+                            let height = 1080u32;
+                            let pitch = width * 4;
+                            let total_bytes = (pitch * height) as usize;
+                            let mut linear_buf = vec![0u8; total_bytes];
+                            let tiled_slice = unsafe { std::slice::from_raw_parts(addr as *const u8, size) };
+                            let detiled_res = layout.detile(tiled_slice, 0, 0, &mut linear_buf, pitch as usize, total_bytes);
+                            let detiled_ok = detiled_res.is_ok();
+                            let upload_ptr = if detiled_ok {
+                                linear_buf.as_ptr()
+                            } else {
+                                addr as *const u8
+                            };
+                            let non_zero = linear_buf.iter().filter(|&&b| b != 0).count();
+                            static DETILE_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            if DETILE_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0 {
+                                eprintln!("[MetVL:Detile] result={:?} size={} non_zero={}/{}", detiled_res, size, non_zero, total_bytes);
+                            }
+                            if non_zero > 0 {
+                                crate::d3dmetal_bridge_upload_frame(upload_ptr, width, height, pitch);
+                            }
+                        } else if let Some((ptr, desc)) = crate::resource::texture_memory(res) {
+                            if !ptr.is_null() && desc.width > 0 && desc.height > 0 {
+                                let width = desc.width as u32;
+                                let height = desc.height;
+                                let pitch = width * 4;
+                                let byte_len = (pitch * height) as usize;
+                                let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, byte_len) };
+                                let nz = slice.iter().filter(|&&b| b != 0).count();
+                                if nz > 0 {
+                                    crate::d3dmetal_bridge_upload_frame(ptr, width, height, pitch);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            unsafe {
+                crate::d3dmetal_bridge_present();
+            }
+            called.end();
+            return S_OK;
+        }
         if let Some(presenter) = crate::metal_presenter::get_presenter() {
             let buffer_info = if planes > 0 && !plane_parameters.is_null() {
                 // SAFETY: plane_parameters contains plane descriptions passed from the game
