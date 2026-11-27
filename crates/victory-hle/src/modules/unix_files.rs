@@ -66,7 +66,14 @@ pub fn translate_path(win_path: &str) -> PathBuf {
             (Some(l), None, r)
         } else {
             // Named device prefix like "common", "platform", "update", etc.
-            (None, Some(prefix.to_string()), r)
+            let prefix_lower = prefix.to_ascii_lowercase();
+            let norm_prefix = match prefix_lower.as_str() {
+                "commoncrc" | "common" => "common",
+                "platformcrc" | "platform" => "platform",
+                "updatecrc" | "update" => "update",
+                other => other,
+            };
+            (None, Some(norm_prefix.to_string()), r)
         }
     } else {
         (None, None, clean)

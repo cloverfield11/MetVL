@@ -44,8 +44,10 @@ ID3D12Resource* g_upload_buffer = nullptr;
 void* g_upload_cpu_ptr = nullptr;
 ID3D12DescriptorHeap* g_srv_heap = nullptr;
 D3D12_PLACED_SUBRESOURCE_FOOTPRINT g_footprint = {};
-std::atomic<bool> g_has_frame_uploaded{false};
-std::atomic<bool> g_game_rendered_this_frame{false};
+static std::atomic<bool> g_has_frame_uploaded{false};
+static std::atomic<bool> g_splash_loaded{false};
+static std::atomic<bool> g_game_frame_uploaded{false};
+static std::atomic<bool> g_game_rendered_this_frame{false};
 
 UINT g_rtv_desc_size = 0;
 uint32_t g_width = 1920;
@@ -145,6 +147,7 @@ static bool load_image_file_unlocked(const char* filepath) {
     CGContextRelease(context);
     CGImageRelease(image);
 
+    g_splash_loaded.store(true, std::memory_order_release);
     g_has_frame_uploaded.store(true, std::memory_order_release);
     printf("[MetVL:D3DMetal] Successfully loaded %ux%u game visual (%s) into presentation texture buffer\n",
            imgW, imgH, filepath);
@@ -504,6 +507,7 @@ void d3dmetal_bridge_upload_frame(const void* pixels, uint32_t width, uint32_t h
     for (uint32_t y = 0; y < copyHeight; y++) {
         memcpy(dst + y * rowPitchDst, src + y * pitch, copyWidth);
     }
+    g_game_frame_uploaded.store(true, std::memory_order_release);
     g_has_frame_uploaded.store(true, std::memory_order_release);
 }
 
@@ -522,7 +526,11 @@ void d3dmetal_bridge_present(void) {
         d3dmetal_bridge_begin_frame();
     }
 
-    if (g_has_frame_uploaded.load(std::memory_order_acquire) && g_game_texture && g_upload_buffer && g_srv_heap && g_textured_pso) {
+    uint64_t current_frame = g_frames_presented.load(std::memory_order_relaxed);
+    bool has_game_frame = g_game_frame_uploaded.load(std::memory_order_acquire);
+    bool should_draw_texture = has_game_frame || (g_splash_loaded.load(std::memory_order_acquire) && current_frame < 120);
+
+    if (should_draw_texture && g_game_texture && g_upload_buffer && g_srv_heap && g_textured_pso) {
         // 1. Transition game texture to COPY_DEST
         D3D12_RESOURCE_BARRIER b1 = {};
         b1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;

@@ -1478,6 +1478,14 @@ fn close_sync_object(handle: usize) -> bool {
     SYNC_OBJECTS.lock().unwrap().remove(&handle).is_some()
 }
 
+fn is_sync_signaled(kind: &SyncKind, tid: u32) -> bool {
+    match kind {
+        SyncKind::Event { signaled, .. } => *signaled,
+        SyncKind::Semaphore { count, .. } => *count > 0,
+        SyncKind::Mutex { owner, .. } => owner.is_none() || *owner == Some(tid),
+    }
+}
+
 fn try_acquire_sync(kind: &mut SyncKind, tid: u32) -> bool {
     match kind {
         SyncKind::Event { manual_reset, signaled } => {
@@ -1854,14 +1862,21 @@ pub extern "win64" fn WaitForMultipleObjects(count: u32, handles: *const *mut c_
             let mut all_signaled = true;
             for &h in h_slice {
                 if let Some(obj) = get_sync_object(h) {
-                    let mut guard = obj.kind.lock().unwrap();
-                    if !try_acquire_sync(&mut *guard, tid) {
+                    let guard = obj.kind.lock().unwrap();
+                    if !is_sync_signaled(&*guard, tid) {
                         all_signaled = false;
                         break;
                     }
                 }
             }
             if all_signaled {
+                // Now safely acquire all objects atomically
+                for &h in h_slice {
+                    if let Some(obj) = get_sync_object(h) {
+                        let mut guard = obj.kind.lock().unwrap();
+                        let _ = try_acquire_sync(&mut *guard, tid);
+                    }
+                }
                 return WAIT_OBJECT_0;
             }
             if let Some(dl) = deadline {

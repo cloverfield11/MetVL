@@ -637,6 +637,13 @@ extern "win64" fn execute(this: This, count: u32, lists: *const This) {
         release_held(false);
         return;
     }
+    #[cfg(target_os = "macos")]
+    {
+        unsafe {
+            crate::d3dmetal_bridge_execute();
+        }
+        return;
+    }
     let _ = this;
     static ONCE: AtomicBool = AtomicBool::new(false);
     if !ONCE.swap(true, Ordering::Relaxed) {
@@ -1066,12 +1073,15 @@ extern "win64" fn present(
                                 addr as *const u8
                             };
                             let non_zero = linear_buf.iter().filter(|&&b| b != 0).count();
+                            let non_zero_tiled = tiled_slice.iter().filter(|&&b| b != 0).count();
                             static DETILE_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                             if DETILE_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0 {
-                                eprintln!("[MetVL:Detile] result={:?} size={} non_zero={}/{}", detiled_res, size, non_zero, total_bytes);
+                                eprintln!("[MetVL:Detile] result={:?} size={} non_zero={}/{} (tiled_nz={})", detiled_res, size, non_zero, total_bytes, non_zero_tiled);
                             }
                             if non_zero > 0 {
                                 crate::d3dmetal_bridge_upload_frame(upload_ptr, width, height, pitch);
+                            } else if non_zero_tiled > 0 {
+                                crate::d3dmetal_bridge_upload_frame(addr as *const u8, width, height, pitch);
                             }
                         } else if let Some((ptr, desc)) = crate::resource::texture_memory(res) {
                             if !ptr.is_null() && desc.width > 0 && desc.height > 0 {
