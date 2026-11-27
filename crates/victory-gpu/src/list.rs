@@ -1561,7 +1561,11 @@ extern "win64" fn set_pipeline(this: This, pipeline: This) {
     }
     #[cfg(windows)]
     with_state(this, |_, state| state.set_pipeline(pipeline));
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    unsafe {
+        crate::d3dmetal_bridge_set_pipeline(pipeline as usize as u64);
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = this;
 }
 

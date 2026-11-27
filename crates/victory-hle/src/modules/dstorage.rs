@@ -24,8 +24,12 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::{CStr, c_char, c_void};
+#[cfg(windows)]
 use std::os::windows::fs::FileExt;
+#[cfg(windows)]
 use std::os::windows::io::FromRawHandle;
+#[cfg(not(windows))]
+use std::os::unix::fs::FileExt;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
@@ -125,30 +129,45 @@ extern "win64" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out:
     if path.is_null() {
         return E_INVALIDARG;
     }
-    // Goes through `files`, so paths on our virtual drives work too.
-    let handle = super::files::CreateFileW(
-        path,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        std::ptr::null(),
-        OPEN_EXISTING,
-        0,
-        std::ptr::null_mut(),
-    );
     // SAFETY: the title passes a NUL-terminated path.
     let name = unsafe {
         let len = (0..).take_while(|&i| *path.add(i) != 0).count();
         String::from_utf16_lossy(std::slice::from_raw_parts(path, len))
     };
-    if handle as isize == -1 {
-        let error = std::io::Error::last_os_error();
-        tracing::warn!(path = name, %error, "dstorage: opening a file failed");
-        return from_win32(&error);
-    }
+    #[cfg(windows)]
+    let file = {
+        let handle = super::files::CreateFileW(
+            path,
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if handle as isize == -1 {
+            let error = std::io::Error::last_os_error();
+            tracing::warn!(path = name, %error, "dstorage: opening a file failed");
+            return from_win32(&error);
+        }
+        unsafe { std::fs::File::from_raw_handle(handle) }
+    };
+    #[cfg(not(windows))]
+    let file = {
+        let host_path = super::unix_files::translate_path(&name);
+        match std::fs::File::open(&host_path) {
+            Ok(f) => {
+                tracing::info!(win_path = %name, host_path = %host_path.display(), "dstorage: opened file");
+                f
+            }
+            Err(e) => {
+                tracing::warn!(win_path = %name, host_path = %host_path.display(), error = %e, "dstorage: opening a file failed");
+                return from_win32(&e);
+            }
+        }
+    };
     let kept = name.clone();
     tracing::info!(path = name, iid = iid_text(iid), "dstorage: file opened");
-    // SAFETY: a handle we just opened and nobody else owns.
-    let file = unsafe { std::fs::File::from_raw_handle(handle) };
     let files = Files::new(file, Io::chosen());
     let file = Instance::create(Object::new("dstorage file", &FILE_VTABLE), File { files });
     if stream_log::on() {
@@ -338,6 +357,7 @@ impl Files {
     }
 
     /// Reads at `offset`; as [`FileExt::seek_read`].
+    #[cfg(windows)]
     fn read_at(&self, out: &mut [u8], offset: u64) -> std::io::Result<usize> {
         use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_NO_BUFFERING, FILE_FLAG_OVERLAPPED};
         let flags = match self.io {
@@ -355,6 +375,11 @@ impl Files {
             (file, _) => file.unwrap_or(&self.first).seek_read(out, offset),
         }
     }
+
+    #[cfg(not(windows))]
+    fn read_at(&self, out: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.first.read_at(out, offset)
+    }
 }
 
 /// A number for this thread: 0 for the first that asks, and so on.
@@ -368,6 +393,7 @@ fn this_thread() -> usize {
 
 /// Another handle to `file`, for reading; `None` if the host gives none
 /// (then the first one is used).
+#[cfg(windows)]
 fn reopen(file: &std::fs::File, flags: u32) -> Option<std::fs::File> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
@@ -383,6 +409,7 @@ fn reopen(file: &std::fs::File, flags: u32) -> Option<std::fs::File> {
 }
 
 /// A read through a handle opened for overlapped reads, waited for.
+#[cfg(windows)]
 fn read_overlapped(file: &std::fs::File, out: &mut [u8], offset: u64) -> std::io::Result<usize> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_HANDLE_EOF, ERROR_IO_PENDING, HANDLE};
@@ -432,6 +459,7 @@ fn read_overlapped(file: &std::fs::File, out: &mut [u8], offset: u64) -> std::io
 
 /// A read past the file cache: of the whole sectors around the bytes, into
 /// a buffer of this thread's, unless `out` takes them as they are.
+#[cfg(windows)]
 fn read_direct(file: &std::fs::File, out: &mut [u8], offset: u64) -> std::io::Result<usize> {
     /// Every disk's sectors are at most this; offsets, sizes and addresses
     /// are multiples of it.
@@ -1757,12 +1785,12 @@ static QUEUE_VTABLE: Methods<12> = Methods([
 pub(crate) fn module() -> HleModule {
     HleModule {
         name: "dstorage",
-        dlls: &["xcrdapi.dll"],
+        dlls: &["xcrdapi.dll", "XCRDAPI.dll"],
         exports: vec![hle_export!(DStorageGetFactory)],
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::os::windows::ffi::OsStrExt;
     use std::time::{Duration, Instant};

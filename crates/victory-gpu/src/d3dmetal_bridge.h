@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,12 @@ void d3dmetal_bridge_draw(uint32_t vertex_count, uint32_t instance_count, uint32
 
 /// Records an indexed draw command.
 void d3dmetal_bridge_draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance);
+
+/// Registers a pipeline state object compiled from DXIL shaders.
+bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_bytes, size_t vs_len, const void* ps_bytes, size_t ps_len);
+
+/// Binds an active pipeline state for subsequent draw commands.
+void d3dmetal_bridge_set_pipeline(uint64_t pipeline_id);
 
 /// Submits recorded commands to the Apple Silicon GPU queue.
 void d3dmetal_bridge_execute(void);

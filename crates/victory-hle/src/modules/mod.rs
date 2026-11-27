@@ -13,7 +13,6 @@ pub mod audio;
 pub mod d3d12x;
 pub mod display;
 pub mod dsp;
-#[cfg(windows)]
 pub mod dstorage;
 #[cfg(windows)]
 pub mod files;
@@ -71,7 +70,6 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(apu::module());
     #[cfg(windows)]
     all.push(media::module());
-    #[cfg(windows)]
     all.push(dstorage::module());
     all.push(files::module());
     all.push(lifecycle::module());

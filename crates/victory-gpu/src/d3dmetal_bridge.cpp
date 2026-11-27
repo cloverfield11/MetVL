@@ -9,6 +9,7 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <unordered_map>
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
@@ -37,6 +38,9 @@ UINT64 g_fence_values[FRAME_COUNT] = { 0, 0 };
 
 ID3D12RootSignature* g_root_sig = nullptr;
 ID3D12PipelineState* g_textured_pso = nullptr;
+ID3DBlob* g_default_ps_blob = nullptr;
+std::unordered_map<uint64_t, ID3D12PipelineState*> g_pso_map;
+ID3D12PipelineState* g_current_pso = nullptr;
 
 // Texture Upload and Blit Resources
 ID3D12Resource* g_game_texture = nullptr;
@@ -142,7 +146,12 @@ static bool load_image_file_unlocked(const char* filepath) {
     CGContextSetRGBFillColor(context, 0.0, 0.0, 0.0, 1.0);
     CGContextFillRect(context, CGRectMake(0, 0, g_width, g_height));
 
+    // Flip vertically so the top of the image matches Direct3D texture coordinate V=0 (upright)
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, 0, g_height);
+    CGContextScaleCTM(context, 1.0, -1.0);
     CGContextDrawImage(context, CGRectMake(0, 0, g_width, g_height), image);
+    CGContextRestoreGState(context);
 
     CGContextRelease(context);
     CGImageRelease(image);
@@ -262,18 +271,27 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
         g_fence_values[i] = 0;
     }
 
-    // 9. Root Signature: Table (1 SRV at t0) + Static Sampler (s0)
+    // 9. Root Signature:
+    // Param 0: 64 Root Constants at b0, space 0 (User Data / SM 6.6 required)
+    // Param 1: Descriptor Table (1 SRV at t0)
+    // Static Sampler at s0
     D3D12_DESCRIPTOR_RANGE range = {};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     range.NumDescriptors = 1;
     range.BaseShaderRegister = 0;
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[1] = {};
-    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[0].DescriptorTable.pDescriptorRanges = &range;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_PARAMETER rootParams[2] = {};
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[0].Constants.ShaderRegister = 0;
+    rootParams[0].Constants.RegisterSpace = 0;
+    rootParams[0].Constants.Num32BitValues = 64;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[1].DescriptorTable.pDescriptorRanges = &range;
+    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -281,21 +299,35 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
     sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.ShaderRegister = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rsDesc = {};
-    rsDesc.NumParameters = 1;
+    rsDesc.NumParameters = 2;
     rsDesc.pParameters = rootParams;
     rsDesc.NumStaticSamplers = 1;
     rsDesc.pStaticSamplers = &sampler;
-    rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    rsDesc.Flags = (D3D12_ROOT_SIGNATURE_FLAGS)(
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+        0x2000 | // D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+        0x4000   // D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED
+    );
 
     ID3DBlob* sigBlob = nullptr;
     ID3DBlob* errBlob = nullptr;
-    D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    HRESULT sHr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
+    if (FAILED(sHr) || !sigBlob) {
+        if (errBlob) {
+            fprintf(stderr, "[MetVL:D3DMetal] Root Signature Serialization failed: %s\n", (char*)errBlob->GetBufferPointer());
+            errBlob->Release();
+        }
+        // Fallback without directly indexed flags if needed
+        rsDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, nullptr);
+    }
     if (sigBlob) {
         g_device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&g_root_sig));
         sigBlob->Release();
+        printf("[MetVL:D3DMetal] Root Signature created successfully with SM 6.6 direct indexing support\n");
     }
 
     // 10. Textured Pipeline State (for Game Frame Presentation)
@@ -320,8 +352,8 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
 
         g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_textured_pso));
         vsBlob->Release();
-        psBlob->Release();
-        printf("[MetVL:D3DMetal] Compiled game fullscreen textured PSO: %p\n", g_textured_pso);
+        g_default_ps_blob = psBlob;
+        printf("[MetVL:D3DMetal] Compiled game fullscreen textured PSO: %p (default PS cached)\n", g_textured_pso);
     }
 
     // 11. Create Game Frame Texture & Upload Buffer (1920x1080 RGBA)
@@ -385,26 +417,6 @@ bool d3dmetal_bridge_init(void* metal_layer, uint32_t width, uint32_t height) {
         printf("[MetVL:D3DMetal] Game frame texture pipeline ready (1920x1080 RGBA, SRV Heap: %p)\n", g_srv_heap);
     }
 
-    // Pre-load official game splash visual directly into upload buffer
-    if (const char* env = getenv("METVL_SPLASH_IMAGE")) {
-        load_image_file_unlocked(env);
-    }
-    const char* splash_candidates[] = {
-        "/Volumes/ZALUPA/scarlet-americas/xbs_splash.png",
-        "xbs_splash.png",
-        nullptr
-    };
-    for (int i = 0; splash_candidates[i]; i++) {
-        if (g_has_frame_uploaded.load()) break;
-        FILE* f = fopen(splash_candidates[i], "rb");
-        if (f) {
-            fclose(f);
-            if (load_image_file_unlocked(splash_candidates[i])) {
-                break;
-            }
-        }
-    }
-
     // Set Viewport & Scissor
     g_viewport = { 0.0f, 0.0f, (float)g_width, (float)g_height, 0.0f, 1.0f };
     g_scissor = { 0, 0, (LONG)g_width, (LONG)g_height };
@@ -454,10 +466,70 @@ void d3dmetal_bridge_clear_rtv(float r, float g, float b, float a) {
     UINT idx = g_swapchain->GetCurrentBackBufferIndex();
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = g_rtv_heap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += idx * g_rtv_desc_size;
-
-    const float clearColor[4] = { r, g, b, a };
+    const float clearColor[4] = { r, g, b, (a > 0.0f ? a : 1.0f) };
     g_cmd_list->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     g_game_rendered_this_frame.store(true, std::memory_order_release);
+}
+
+bool d3dmetal_bridge_register_pipeline(uint64_t pipeline_id, const void* vs_bytes, size_t vs_len, const void* ps_bytes, size_t ps_len) {
+    if (!g_device || !g_root_sig) return false;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_pso_map.find(pipeline_id) != g_pso_map.end()) {
+        return true;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = g_root_sig;
+    if (vs_bytes && vs_len > 0) {
+        psoDesc.VS = { vs_bytes, vs_len };
+    }
+    if (ps_bytes && ps_len > 0) {
+        psoDesc.PS = { ps_bytes, ps_len };
+    } else if (g_default_ps_blob) {
+        psoDesc.PS = { g_default_ps_blob->GetBufferPointer(), g_default_ps_blob->GetBufferSize() };
+    }
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM;
+    psoDesc.SampleDesc.Count = 1;
+
+    ID3D12PipelineState* pso = nullptr;
+    HRESULT hr = g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso));
+    if (SUCCEEDED(hr) && pso) {
+        g_pso_map[pipeline_id] = pso;
+        printf("[MetVL:D3DMetal] Successfully compiled native in-game PSO for pipeline 0x%llx (VS: %zu B, PS: %zu B)\n",
+               (unsigned long long)pipeline_id, vs_len, ps_len);
+        return true;
+    } else {
+        fprintf(stderr, "[MetVL:D3DMetal] CreateGraphicsPipelineState failed for 0x%llx: 0x%08x\n",
+                (unsigned long long)pipeline_id, (unsigned)hr);
+        return false;
+    }
+}
+
+void d3dmetal_bridge_set_pipeline(uint64_t pipeline_id) {
+    if (!g_is_active.load()) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_pso_map.find(pipeline_id);
+    if (it != g_pso_map.end()) {
+        g_current_pso = it->second;
+    } else {
+        g_current_pso = nullptr;
+    }
+    if (g_recording && g_cmd_list && g_current_pso) {
+        g_cmd_list->SetPipelineState(g_current_pso);
+    }
 }
 
 void d3dmetal_bridge_clear_dsv(float depth, uint8_t stencil) {
@@ -466,27 +538,51 @@ void d3dmetal_bridge_clear_dsv(float depth, uint8_t stencil) {
 }
 
 void d3dmetal_bridge_draw(uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance) {
-    (void)vertex_count;
-    (void)instance_count;
-    (void)start_vertex;
-    (void)start_instance;
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
+    if (g_cmd_list && g_root_sig) {
+        g_cmd_list->RSSetViewports(1, &g_viewport);
+        g_cmd_list->RSSetScissorRects(1, &g_scissor);
+        g_cmd_list->SetGraphicsRootSignature(g_root_sig);
+        g_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (g_srv_heap) {
+            ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
+            g_cmd_list->SetDescriptorHeaps(1, heaps);
+            g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
+        }
+        ID3D12PipelineState* pso = g_current_pso ? g_current_pso : g_textured_pso;
+        if (pso) {
+            g_cmd_list->SetPipelineState(pso);
+        }
+        g_cmd_list->DrawInstanced(vertex_count, instance_count, start_vertex, start_instance);
+    }
     g_game_rendered_this_frame.store(true, std::memory_order_release);
 }
 
 void d3dmetal_bridge_draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance) {
-    (void)index_count;
-    (void)instance_count;
-    (void)start_index;
     (void)base_vertex;
-    (void)start_instance;
     if (!g_is_active.load()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_recording) d3dmetal_bridge_begin_frame();
 
+    if (g_cmd_list && g_root_sig) {
+        g_cmd_list->RSSetViewports(1, &g_viewport);
+        g_cmd_list->RSSetScissorRects(1, &g_scissor);
+        g_cmd_list->SetGraphicsRootSignature(g_root_sig);
+        g_cmd_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (g_srv_heap) {
+            ID3D12DescriptorHeap* heaps[] = { g_srv_heap };
+            g_cmd_list->SetDescriptorHeaps(1, heaps);
+            g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
+        }
+        ID3D12PipelineState* pso = g_current_pso ? g_current_pso : g_textured_pso;
+        if (pso) {
+            g_cmd_list->SetPipelineState(pso);
+        }
+        g_cmd_list->DrawInstanced(index_count, instance_count, start_index, start_instance);
+    }
     g_game_rendered_this_frame.store(true, std::memory_order_release);
 }
 
@@ -526,11 +622,8 @@ void d3dmetal_bridge_present(void) {
         d3dmetal_bridge_begin_frame();
     }
 
-    uint64_t current_frame = g_frames_presented.load(std::memory_order_relaxed);
     bool has_game_frame = g_game_frame_uploaded.load(std::memory_order_acquire);
-    bool should_draw_texture = has_game_frame || (g_splash_loaded.load(std::memory_order_acquire) && current_frame < 120);
-
-    if (should_draw_texture && g_game_texture && g_upload_buffer && g_srv_heap && g_textured_pso) {
+    if (has_game_frame && g_game_texture && g_upload_buffer && g_srv_heap && g_textured_pso) {
         // 1. Transition game texture to COPY_DEST
         D3D12_RESOURCE_BARRIER b1 = {};
         b1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -575,6 +668,7 @@ void d3dmetal_bridge_present(void) {
         g_cmd_list->SetGraphicsRootDescriptorTable(0, g_srv_heap->GetGPUDescriptorHandleForHeapStart());
         g_cmd_list->SetPipelineState(g_textured_pso);
         g_cmd_list->DrawInstanced(3, 1, 0, 0);
+        g_game_frame_uploaded.store(false, std::memory_order_release);
     }
     g_game_rendered_this_frame.store(false, std::memory_order_release);
 

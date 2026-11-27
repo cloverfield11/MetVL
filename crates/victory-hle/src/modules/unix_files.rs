@@ -313,7 +313,7 @@ pub extern "win64" fn ReadFile(
     buffer: *mut u8,
     len: u32,
     read: *mut u32,
-    _overlapped: *mut c_void,
+    overlapped: *mut c_void,
 ) -> i32 {
     let Some(of) = get_handle(handle) else {
         SetLastError(ERROR_INVALID_HANDLE);
@@ -322,8 +322,42 @@ pub extern "win64" fn ReadFile(
 
     let mut file = of.file.lock().unwrap();
     let slice = unsafe { std::slice::from_raw_parts_mut(buffer, len as usize) };
-    use std::io::Read;
-    match file.read(slice) {
+    
+    let res = if !overlapped.is_null() {
+        #[repr(C)]
+        struct Overlapped {
+            internal: usize,
+            internal_high: usize,
+            offset: u32,
+            offset_high: u32,
+            event: *mut c_void,
+        }
+        let ov = unsafe { &mut *(overlapped as *mut Overlapped) };
+        let offset = ((ov.offset_high as u64) << 32) | (ov.offset as u64);
+        use std::os::unix::fs::FileExt;
+        match file.read_at(slice, offset) {
+            Ok(n) => {
+                ov.internal = 0; // STATUS_SUCCESS
+                ov.internal_high = n;
+                if !ov.event.is_null() {
+                    super::unix_crt::SetEvent(ov.event);
+                }
+                Ok(n)
+            }
+            Err(e) => {
+                ov.internal = 0xC0000001; // STATUS_UNSUCCESSFUL
+                if !ov.event.is_null() {
+                    super::unix_crt::SetEvent(ov.event);
+                }
+                Err(e)
+            }
+        }
+    } else {
+        use std::io::Read;
+        file.read(slice)
+    };
+
+    match res {
         Ok(n) => {
             if !read.is_null() {
                 unsafe { *read = n as u32; }

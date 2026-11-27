@@ -111,6 +111,14 @@ unsafe extern "C" {
     pub fn d3dmetal_bridge_clear_dsv(depth: f32, stencil: u8);
     pub fn d3dmetal_bridge_draw(vertex_count: u32, instance_count: u32, start_vertex: u32, start_instance: u32);
     pub fn d3dmetal_bridge_draw_indexed(index_count: u32, instance_count: u32, start_index: u32, base_vertex: i32, start_instance: u32);
+    pub fn d3dmetal_bridge_register_pipeline(
+        pipeline_id: u64,
+        vs_bytes: *const u8,
+        vs_len: usize,
+        ps_bytes: *const u8,
+        ps_len: usize,
+    ) -> bool;
+    pub fn d3dmetal_bridge_set_pipeline(pipeline_id: u64);
     pub fn d3dmetal_bridge_execute();
     pub fn d3dmetal_bridge_present();
     pub fn d3dmetal_bridge_upload_frame(pixels: *const u8, width: u32, height: u32, pitch: u32);
@@ -142,3 +150,11 @@ pub use watch::{
     title_memory_remapping, title_memory_splitting, title_memory_unmapping, title_memory_written,
     writing as kernel_will_write,
 };
+#[cfg(not(windows))]
+pub struct KernelWrite;
+#[cfg(not(windows))]
+pub fn kernel_writing(_at: usize, _len: usize) -> KernelWrite { KernelWrite }
+#[cfg(not(windows))]
+pub fn kernel_will_write(_at: usize, _len: usize) {}
+#[cfg(not(windows))]
+pub fn title_memory_written(_at: usize, _len: usize, _pages: bool) {}

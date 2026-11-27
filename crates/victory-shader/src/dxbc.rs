@@ -68,23 +68,41 @@ const MAX_PARTS: usize = 256;
 
 impl<'a> Container<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, ShaderError> {
-        if data.len() < HEADER_SIZE || &data[0..4] != b"DXBC" {
+        if data.len() < 16 {
             return Err(ShaderError::NotDxbc);
         }
-        let digest = data[4..20].try_into().expect("16 bytes");
-        let version = (u16_at(data, 0x14)?, u16_at(data, 0x16)?);
-        let total = u32_at(data, 0x18)? as usize;
-        if total > data.len() || total < HEADER_SIZE {
+        let (digest, version, total, count, offset_table_start, offset_shift) =
+            if data.len() >= HEADER_SIZE && &data[0..4] == b"DXBC" {
+                let digest: [u8; 16] = data[4..20].try_into().expect("16 bytes");
+                let version = (u16_at(data, 0x14)?, u16_at(data, 0x16)?);
+                let total = u32_at(data, 0x18)? as usize;
+                let count = u32_at(data, 0x1C)? as usize;
+                (digest, version, total, count, HEADER_SIZE, 0usize)
+            } else if u32_at(data, 0)? == 0x1dd311b3 {
+                let digest = [0u8; 16];
+                let version = (u16_at(data, 0x04)?, u16_at(data, 0x06)?);
+                let total = u32_at(data, 0x08)? as usize;
+                let count = u32_at(data, 0x0C)? as usize;
+                (digest, version, total, count, 0x10, 0x10usize)
+            } else {
+                return Err(ShaderError::NotDxbc);
+            };
+
+        if total > data.len() || total < offset_table_start {
             return Err(ShaderError::Malformed("container size disagrees with data"));
         }
         let data = &data[..total];
-        let count = u32_at(data, 0x1C)? as usize;
         if count > MAX_PARTS {
             return Err(ShaderError::Malformed("implausible part count"));
         }
         let mut parts = Vec::with_capacity(count);
         for i in 0..count {
-            let offset = u32_at(data, HEADER_SIZE + 4 * i)? as usize;
+            let raw_offset = u32_at(data, offset_table_start + 4 * i)? as usize;
+            let offset = if raw_offset >= offset_shift {
+                raw_offset - offset_shift
+            } else {
+                raw_offset
+            };
             let fourcc = FourCC(
                 data.get(offset..offset + 4)
                     .ok_or(ShaderError::Malformed("part header out of bounds"))?
@@ -100,6 +118,14 @@ impl<'a> Container<'a> {
                 offset,
                 data: body,
             });
+        }
+        let mut digest = digest;
+        if digest == [0u8; 16] {
+            if let Some(p) = parts.iter().find(|p| p.fourcc == FourCC::HASH) {
+                if p.data.len() >= 16 {
+                    digest.copy_from_slice(&p.data[..16]);
+                }
+            }
         }
         Ok(Container {
             digest,
@@ -179,5 +205,33 @@ mod tests {
         assert!(Container::parse(&bytes).is_err());
         bytes.truncate(last);
         assert!(Container::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn parses_scarlett_container() {
+        if let Ok(bytes) = std::fs::read("/tmp/gta6_shaders/2f9b4e82c29c9c3e.vertex.cdxil") {
+            let c = Container::parse(&bytes).expect("should parse Scarlett container");
+            assert_eq!(c.parts.len(), 7);
+            assert!(c.part(FourCC::DXIL).is_some());
+            assert!(c.part(FourCC::SFI0).is_some());
+            assert!(c.part(FourCC::ISG1).is_some());
+            assert!(c.part(FourCC::OSG1).is_some());
+            assert!(c.part(FourCC::PSV0).is_some());
+
+            let translated = crate::emit::translate(&bytes);
+            println!("Vertex Translation result: {:?}", translated.is_ok());
+            if let Err(e) = &translated {
+                println!("Vertex Translation error: {:?}", e);
+            }
+        }
+        if let Ok(bytes) = std::fs::read("/tmp/ps_clear.cdxil") {
+            let c = Container::parse(&bytes);
+            println!("ps_clear parse: {:?}", c.is_ok());
+            let translated = crate::emit::translate(&bytes);
+            println!("ps_clear translate: {:?}", translated.is_ok());
+            if let Err(e) = &translated {
+                println!("ps_clear error: {:?}", e);
+            }
+        }
     }
 }

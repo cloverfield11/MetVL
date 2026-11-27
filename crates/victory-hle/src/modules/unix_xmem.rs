@@ -114,7 +114,66 @@ pub fn map_aliases(ranges: &[(u64, u64, u64)]) -> bool {
     ranges.iter().all(|&(to, from, len)| map_alias(to, from, len))
 }
 
+fn find_export(base: usize, target_name: &str) -> Option<usize> {
+    unsafe {
+        let dos_hdr = std::slice::from_raw_parts(base as *const u8, 64);
+        if dos_hdr[0] != b'M' || dos_hdr[1] != b'Z' { return None; }
+        let e_lfanew = *(base.wrapping_add(0x3c) as *const u32) as usize;
+        let export_rva = *(base.wrapping_add(e_lfanew + 136) as *const u32) as usize;
+        let export_size = *(base.wrapping_add(e_lfanew + 140) as *const u32) as usize;
+        if export_rva == 0 || export_size == 0 { return None; }
+        
+        let export_dir = base.wrapping_add(export_rva);
+        let num_functions = *(export_dir.wrapping_add(20) as *const u32) as usize;
+        let num_names = *(export_dir.wrapping_add(24) as *const u32) as usize;
+        let addr_functions = *(export_dir.wrapping_add(28) as *const u32) as usize;
+        let addr_names = *(export_dir.wrapping_add(32) as *const u32) as usize;
+        let addr_ordinals = *(export_dir.wrapping_add(36) as *const u32) as usize;
+        
+        let name_rvas = std::slice::from_raw_parts(base.wrapping_add(addr_names) as *const u32, num_names);
+        let ordinals = std::slice::from_raw_parts(base.wrapping_add(addr_ordinals) as *const u16, num_names);
+        let functions = std::slice::from_raw_parts(base.wrapping_add(addr_functions) as *const u32, num_functions);
+        
+        for i in 0..num_names {
+            let name_ptr = base.wrapping_add(name_rvas[i] as usize) as *const std::ffi::c_char;
+            if let Ok(name_str) = std::ffi::CStr::from_ptr(name_ptr).to_str() {
+                if name_str == target_name {
+                    let ord = ordinals[i] as usize;
+                    let func_rva = functions[ord] as usize;
+                    return Some(base.wrapping_add(func_rva));
+                }
+            }
+        }
+    }
+    None
+}
+
+type AllocRoutine = extern "win64" fn(usize, u64) -> *mut c_void;
+type FreeRoutine = extern "win64" fn(*mut c_void, u64);
+
+fn hooks() -> [usize; 2] {
+    static HOOKS: std::sync::OnceLock<[usize; 2]> = std::sync::OnceLock::new();
+    *HOOKS.get_or_init(|| {
+        let base = crate::runtime::main_image().unwrap_or(0x140000000);
+        if let Some(hooks_addr) = find_export(base, "__XMemAllocationHooks__") {
+            unsafe {
+                let p = hooks_addr as *const [usize; 2];
+                let val = *p;
+                tracing::info!(alloc = format_args!("{:#x}", val[0]), free = format_args!("{:#x}", val[1]), "found __XMemAllocationHooks__");
+                val
+            }
+        } else {
+            [0, 0]
+        }
+    })
+}
+
 pub extern "win64" fn XMemAlloc(size: usize, attributes: u64) -> *mut c_void {
+    let [alloc_hook, _] = hooks();
+    if alloc_hook != 0 {
+        let alloc: AllocRoutine = unsafe { std::mem::transmute(alloc_hook) };
+        return alloc(size, attributes);
+    }
     XMemAllocDefault(size, attributes)
 }
 
@@ -140,6 +199,13 @@ pub extern "win64" fn XMemAllocDefault(size: usize, _attributes: u64) -> *mut c_
 }
 
 pub extern "win64" fn XMemFree(address: *mut c_void, attributes: u64) {
+    if address.is_null() { return; }
+    let [_, free_hook] = hooks();
+    if free_hook != 0 {
+        let free: FreeRoutine = unsafe { std::mem::transmute(free_hook) };
+        free(address, attributes);
+        return;
+    }
     XMemFreeDefault(address, attributes);
 }
 
@@ -255,6 +321,73 @@ pub extern "win64" fn XMemMapPhysicalPagesScatter(
         }
     }
     1
+}
+
+pub struct PageWindow {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl PageWindow {
+    pub fn bytes(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+pub fn page_window(pages: &[usize], offset: usize, len: usize) -> Option<PageWindow> {
+    if pages.is_empty() { return None; }
+    let first = offset / PAGE;
+    let within = offset % PAGE;
+    let table = physical_pages();
+    let map = table.as_ref().unwrap();
+    let page_id = *pages.get(first)?;
+    let &(src_addr, _) = map.get(&page_id)?;
+    if within + len <= PAGE {
+        return Some(PageWindow {
+            ptr: (src_addr + within) as *mut u8,
+            len,
+        });
+    }
+    None
+}
+
+pub fn pages_known(pages: &[usize], offset: usize, len: usize) -> bool {
+    let table = physical_pages();
+    let map = table.as_ref().unwrap();
+    let first = offset / PAGE;
+    let end = (offset + len).div_ceil(PAGE);
+    pages.get(first..end).is_some_and(|slice| slice.iter().all(|p| map.contains_key(p)))
+}
+
+pub fn pages_shown(_pages: &[usize], _offset: usize, _len: usize) -> Vec<(usize, usize)> {
+    Vec::new()
+}
+
+pub fn pages_written(_pages: &[usize], _offset: usize, _len: usize) {}
+
+pub fn stream_notice() -> bool { false }
+
+pub fn map_costs() -> Option<String> { None }
+
+pub fn write_physical(pages: &[usize], offset: usize, data: &[u8]) -> bool {
+    let table = physical_pages();
+    let map = table.as_ref().unwrap();
+    let first = offset / PAGE;
+    let mut within = offset % PAGE;
+    let mut done = 0;
+    for &page_id in pages.get(first..).unwrap_or(&[]) {
+        if done >= data.len() { break; }
+        let Some(&(src_addr, _)) = map.get(&page_id) else {
+            return false;
+        };
+        let k = (PAGE - within).min(data.len() - done);
+        unsafe {
+            std::ptr::copy_nonoverlapping(data[done..].as_ptr(), (src_addr + within) as *mut u8, k);
+        }
+        within = 0;
+        done += k;
+    }
+    true
 }
 
 pub extern "win64" fn XMemVirtualAlloc(

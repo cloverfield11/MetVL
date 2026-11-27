@@ -2232,94 +2232,11 @@ pub extern "win64" fn SetThreadIdealProcessorEx(_h_thread: *mut c_void, _ideal_p
 
 use crate::modules::xgameruntime::{Methods, Object};
 
-// DirectStorage Factory & Objects for macOS
-static DSTORAGE_FACTORY_VTABLE: Methods<16> = Methods([
-    dstorage_stub as *const (), // 0x00 QueryInterface
-    dstorage_addref as *const (), // 0x08 AddRef
-    dstorage_release as *const (), // 0x10 Release
-    dstorage_stub as *const (), // 0x18
-    dstorage_open_file as *const (), // 0x20 OpenFile
-    dstorage_create_status_array as *const (), // 0x28 CreateStatusArray
-    dstorage_stub as *const (), // 0x30
-    dstorage_stub as *const (), // 0x38
-    dstorage_set_staging_buffer_size as *const (), // 0x40 SetStagingBufferSize
-    dstorage_stub as *const (), // 0x48
-    dstorage_create_queue as *const (), // 0x50 CreateQueue
-    dstorage_stub as *const (), // 0x58
-    dstorage_stub as *const (), // 0x60
-    dstorage_stub as *const (), // 0x68
-    dstorage_stub as *const (), // 0x70
-    dstorage_stub as *const (), // 0x78
-]);
-
-static DSTORAGE_QUEUE_VTABLE: Methods<16> = Methods([
-    dstorage_stub as *const (), // 0x00
-    dstorage_addref as *const (), // 0x08
-    dstorage_release as *const (), // 0x10
-    dstorage_stub as *const (), // 0x18 EnqueueRequest
-    dstorage_stub as *const (), // 0x20 EnqueueStatus
-    dstorage_stub as *const (), // 0x28 EnqueueSignal
-    dstorage_stub as *const (), // 0x30 Submit
-    dstorage_stub as *const (), // 0x38 CancelRequestsWithTag
-    dstorage_stub as *const (), // 0x40 Close
-    dstorage_stub as *const (), // 0x48
-    dstorage_stub as *const (), // 0x50
-    dstorage_stub as *const (), // 0x58
-    dstorage_stub as *const (), // 0x60
-    dstorage_stub as *const (), // 0x68
-    dstorage_stub as *const (), // 0x70
-    dstorage_stub as *const (), // 0x78
-]);
-
-static DSTORAGE_STATUS_VTABLE: Methods<16> = Methods([
-    dstorage_stub as *const (), // 0x00
-    dstorage_addref as *const (), // 0x08
-    dstorage_release as *const (), // 0x10
-    dstorage_is_complete as *const (), // 0x18 IsComplete
-    dstorage_stub as *const (), // 0x20 GetStatus
-    dstorage_stub as *const (), // 0x28
-    dstorage_stub as *const (), // 0x30
-    dstorage_stub as *const (), // 0x38
-    dstorage_stub as *const (), // 0x40
-    dstorage_stub as *const (), // 0x48
-    dstorage_stub as *const (), // 0x50
-    dstorage_stub as *const (), // 0x58
-    dstorage_stub as *const (), // 0x60
-    dstorage_stub as *const (), // 0x68
-    dstorage_stub as *const (), // 0x70
-    dstorage_stub as *const (), // 0x78
-]);
-
-static DSTORAGE_FACTORY: Object = Object::new("dstorage factory", &DSTORAGE_FACTORY_VTABLE);
-static DSTORAGE_QUEUE: Object = Object::new("dstorage queue", &DSTORAGE_QUEUE_VTABLE);
-static DSTORAGE_STATUS: Object = Object::new("dstorage status array", &DSTORAGE_STATUS_VTABLE);
-
+// C++ helper stubs for vtables
 extern "win64" fn dstorage_stub() -> u64 { 0 }
 extern "win64" fn dstorage_addref() -> u32 { 2 }
 extern "win64" fn dstorage_release() -> u32 { 1 }
-extern "win64" fn dstorage_is_complete() -> u32 { 1 } // Always reports complete
-extern "win64" fn dstorage_set_staging_buffer_size(_this: *mut c_void, size: u32) -> i32 {
-    eprintln!("dstorage: SetStagingBufferSize {size} bytes");
-    0 // S_OK
-}
-extern "win64" fn dstorage_create_status_array(_this: *mut c_void, _capacity: u32, _name: *const c_char, _iid: *const c_void, out: *mut *mut c_void) -> i32 {
-    if !out.is_null() {
-        unsafe { *out = std::ptr::from_ref(&DSTORAGE_STATUS).cast_mut().cast(); }
-    }
-    0 // S_OK
-}
-extern "win64" fn dstorage_create_queue(_this: *mut c_void, _desc: *const c_void, _iid: *const c_void, out: *mut *mut c_void) -> i32 {
-    if !out.is_null() {
-        unsafe { *out = std::ptr::from_ref(&DSTORAGE_QUEUE).cast_mut().cast(); }
-    }
-    0 // S_OK
-}
-extern "win64" fn dstorage_open_file(_this: *mut c_void, _path: *const u16, _iid: *const c_void, out: *mut *mut c_void) -> i32 {
-    if !out.is_null() {
-        unsafe { *out = std::ptr::from_ref(&DSTORAGE_QUEUE).cast_mut().cast(); }
-    }
-    0 // S_OK
-}
+
 pub extern "win64" fn _Random_device() -> u32 {
     use std::time::SystemTime;
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(42, |d| d.subsec_nanos())
@@ -2782,13 +2699,6 @@ pub extern "win64" fn _Xtime_get_ticks() -> i64 {
     START_INSTANT.elapsed().as_nanos() as i64
 }
 
-pub extern "win64" fn DStorageGetFactory(_iid: *const c_void, out: *mut *mut c_void) -> i32 {
-    eprintln!("dstorage: DStorageGetFactory called");
-    if !out.is_null() {
-        unsafe { *out = std::ptr::from_ref(&DSTORAGE_FACTORY).cast_mut().cast(); }
-    }
-    0 // S_OK
-}
 
 extern "win64" fn dummy_vtable_method() -> u64 {
     0
@@ -2821,8 +2731,6 @@ pub(crate) fn module() -> HleModule {
             "ws2_32.dll",
             "WS2_32.dll",
             "ole32.dll",
-            "xcrdapi.dll",
-            "XCRDAPI.dll",
         ],
         exports: vec![
             HleExport {
@@ -3191,7 +3099,6 @@ pub(crate) fn module() -> HleModule {
             hle_export!(SetProcessPriorityBoost),
             hle_export!(GetUserDefaultGeoName),
             hle_export!(SetThreadIdealProcessorEx),
-            hle_export!(DStorageGetFactory),
             HleExport {
                 name: "?_Random_device@std@@YAIXZ",
                 address: _Random_device as *const () as usize,

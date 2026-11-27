@@ -64,8 +64,8 @@ pub(crate) struct Shader {
     /// Its part in the stand-in for the indirect light.
     #[cfg(windows)]
     pub(crate) ambient: Option<crate::ambient::Role>,
-    #[cfg(windows)]
-    translated: OnceLock<Option<Translated>>,
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(crate) translated: OnceLock<Option<Translated>>,
 }
 
 impl std::fmt::Debug for Shader {
@@ -116,7 +116,7 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 container: bytes.to_vec(),
                 #[cfg(windows)]
                 ambient: (stage == "compute").then(|| crate::ambient::role(bytes)).flatten(),
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 translated: OnceLock::new(),
             })
         })
@@ -124,12 +124,13 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
 }
 
 /// A translated shader and the console resources its code reads.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) struct Translated {
     pub(crate) host: victory_shader::emit::HostShader,
     /// A compute program's threads in a group.
     pub(crate) threads: Option<[u32; 3]>,
     pub(crate) used: Vec<victory_shader::UsedResource>,
+    #[cfg(windows)]
     pub(crate) tables: crate::draw::TablePlan,
     /// Whether the shader's code can store to buffer memory ([`stores`]);
     /// true when its code is not known.
@@ -141,7 +142,7 @@ pub(crate) struct Translated {
     pub(crate) picks: std::sync::atomic::AtomicU8,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl Shader {
     /// The translation, made on first use; a shader that does not
     /// translate is logged once.
@@ -196,17 +197,20 @@ impl Shader {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn translate(container: &[u8]) -> Result<Translated, String> {
     use victory_shader::{Container, FourCC, HwStage};
-    // The translation depends on it (a view index past a capped heap).
+    #[cfg(windows)]
     crate::descriptor::host::probe_view_limit();
     let c = Container::parse(container).map_err(|e| e.to_string())?;
     let programs = match c.part(FourCC::DXIL).or(c.part(FourCC::ACCC)) {
         Some(part) => victory_shader::native_programs(part.data).map_err(|e| e.to_string())?,
         None => Vec::new(),
     };
+    #[cfg(windows)]
     let host = crate::shader_cache::host_shader(container)?;
+    #[cfg(not(windows))]
+    let host = victory_shader::emit::translate(container).map_err(|e| e.to_string())?;
     let stores = programs.is_empty() || programs.iter().any(stores);
     let threads = programs.iter().find_map(|p| match &p.io {
         victory_shader::native::StageIo::Cs(cs) if cs.threads.iter().all(|&n| n > 0) => Some(cs.threads),
@@ -223,11 +227,13 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         })
         .map(|p| p.used)
         .unwrap_or_default();
+    #[cfg(windows)]
     let tables = crate::draw::TablePlan::new(&used, &host.root_indexed_views);
     Ok(Translated {
         host,
         threads,
         used,
+        #[cfg(windows)]
         tables,
         stores,
         stores_by_address,
@@ -367,7 +373,7 @@ pub(crate) fn builder_runs() -> bool {
 /// (image instructions) and to the program's own scratch memory do not
 /// count: neither reaches a buffer's host copy. After upstream #413,
 /// which leaves scalar-memory stores out and counts image stores.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn stores(program: &victory_shader::NativeProgram) -> bool {
     use victory_shader::gfx10::{Encoding, decode};
     let Ok(code) = decode(&program.code) else {
@@ -393,7 +399,7 @@ fn stores(program: &victory_shader::NativeProgram) -> bool {
 /// (`crate::memory`): a flat or global store or atomic, or code that does
 /// not decode. The programs that only walk ray-tracing structures do not,
 /// whatever they store through views.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn stores_by_address(program: &victory_shader::NativeProgram) -> bool {
     use victory_shader::gfx10::{Encoding, decode};
     let Ok(code) = decode(&program.code) else {
@@ -445,6 +451,34 @@ pub(crate) fn bound(this: This) {
     let frame = crate::frame::current();
     for shader in &p.shaders {
         tracing::info!(pipeline = ?this, frame, stage = shader.stage, size = shader.container.len(), hash = %shader.hash, "first bind");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut vs_dxil: Option<Vec<u8>> = None;
+        let mut ps_dxil: Option<Vec<u8>> = None;
+        for shader in &p.shaders {
+            if let Some(t) = shader.translated() {
+                if shader.stage == "vertex" {
+                    vs_dxil = Some(t.host.dxil.clone());
+                } else if shader.stage == "pixel" {
+                    ps_dxil = Some(t.host.dxil.clone());
+                }
+            }
+        }
+        if vs_dxil.is_some() || ps_dxil.is_some() {
+            let vs = vs_dxil.as_deref().unwrap_or(&[]);
+            let ps = ps_dxil.as_deref().unwrap_or(&[]);
+            let ok = unsafe {
+                crate::d3dmetal_bridge_register_pipeline(
+                    this as usize as u64,
+                    vs.as_ptr(),
+                    vs.len(),
+                    ps.as_ptr(),
+                    ps.len(),
+                )
+            };
+            eprintln!("[MetVL:NativePipeline] pipeline={:p} vs_len={} ps_len={} registered={}", this, vs.len(), ps.len(), ok);
+        }
     }
 }
 
